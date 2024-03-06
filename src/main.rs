@@ -1,3 +1,6 @@
+use wgpu_tutorial1::run;
+
 fn main() {
-    println!("Hello, world!");
+    // Initialize graphics
+    run();
 }
