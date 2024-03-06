@@ -7,15 +7,34 @@ use winit::{
 };
 
 struct State {
+    /// The surface is where rendered images are presented (e.g. The part of the window which is
+    /// drawn to).
     surface: wgpu::Surface,
+    /// The device is a connection to a graphics (GPU) and/or
+    /// compute device (CPU).
+    ///
+    /// The device is responsible for the creation of most rendering
+    /// and compute resources.
+    /// These resources are used in commands which are submitted to a `wgpu::Queue`.
     device: wgpu::Device,
+    /// The queue stores and executes recorded `wgpu::CommandBuffer` objects (collections of
+    /// commands).
+    /// Provides convenience methods for writing to buffers and textures.
     queue: wgpu::Queue,
+    /// Configuration options for a `wgpu::Surface`.
+    /// In this case `State::surface`.
     config: wgpu::SurfaceConfiguration,
+    /// The size of the surface display.
     size: winit::dpi::PhysicalSize<u32>,
     // The window must be declared after the surface so
     // it gets dropped after it as the surface contains
     // unsafe references to the window's resources.
+    /// Winit window.
     window: Window,
+    /// The Render Pipeline is a handle to a rendering (graphics) pipeline.
+    /// A rendering pipeline outlines the necessary procedures for transforming a 
+    /// three-dimentional (3D) scene into a two-dimentional representation.
+    /// In short, a rendering pipeline performs perspective projection.
     render_pipeline: wgpu::RenderPipeline,
 }
 
@@ -23,7 +42,6 @@ impl State {
     // Creating some of the wgpu types requires async code
     async fn new(window: Window) -> Self {
         let size = window.inner_size();
-
         // The instance is a handle to the GPU
         // Backends::all => Vulkan + Metal + DX12 + Browser WebGPU
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -36,7 +54,6 @@ impl State {
         // The surface needs to live as long as the window that created it.
         // State owns the window, so this should be safe.
         let surface = unsafe { instance.create_surface(&window) }.unwrap();
-
         let adapter = instance.request_adapter(
             &wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::default(),
@@ -142,17 +159,31 @@ impl State {
     }
     fn update(&mut self) {}
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+        // get_current_texture waits for the surface to provide a new `wgpu::SurfaceTexture` which
+        // will be rendered to later.
         let output = self.surface.get_current_texture()?;
+        // Create a `wgpu::Textureview` with default settings.
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // Create a command encoder.
+        // The command encoder creates the commands to send to the GPU. The commands are sent as a
+        // command buffer.
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
+        // Use the encoder to create a `wgpu::RenderPass`.
+        // The `wgpu::RenderPass` has all the methods for the actual drawing.
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Render Pass"),
+            // Describe where to draw the color to.
+            // RenderPassColorAttachment has the view field, which informs wgpu what texture to
+            // save the colors to.
+            // Here we are using the view variable we created earlier as the view. This means any
+            // colors drawn to this attachment will get drawn to the screen. 
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
                 resolve_target: None,
                 ops: wgpu::Operations {
+                    // Clear screen
                     load: wgpu::LoadOp::Clear(wgpu::Color {
                         r: 0.1,
                         g: 0.2,
@@ -169,22 +200,19 @@ impl State {
         render_pass.set_pipeline(&self.render_pipeline);
         render_pass.draw(0..3, 0..1);
         drop(render_pass);
-        // submit will accept anything that implements IntoIter
+        // Tell wgpu to finish the command buffer and submit it to the GPU's render queue.
+        // Submit will accept anything that implements IntoIter.
         self.queue.submit(once(encoder.finish()));
         output.present();
         Ok(())
     }
 }
 
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub async fn run() {
-    // Enable error logging
-    env_logger::init();
     // Create event loop
     let event_loop = EventLoop::new();
     // Create and initialize the window
     let window = WindowBuilder::new().build(&event_loop).unwrap();
-
     let mut state = State::new(window).await;
     // Initialize event loop
     event_loop.run(move |event, _, control_flow|  match event {
