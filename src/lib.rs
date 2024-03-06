@@ -147,9 +147,10 @@ impl State {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
-        let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Render Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -165,6 +166,8 @@ impl State {
             timestamp_writes: None,
             occlusion_query_set: None
         });
+        render_pass.set_pipeline(&self.render_pipeline);
+        render_pass.draw(0..3, 0..1);
         drop(render_pass);
         // submit will accept anything that implements IntoIter
         self.queue.submit(once(encoder.finish()));
