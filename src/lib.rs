@@ -57,6 +57,86 @@ impl CameraUniform {
     }
 }
 
+struct CameraController {
+    speed: f32,
+    is_forward_pressed: bool,
+    is_backward_pressed: bool,
+    is_left_pressed: bool,
+    is_right_pressed: bool,
+}
+
+impl CameraController {
+    fn new(speed: f32) -> Self {
+        Self {
+            speed,
+            is_forward_pressed: false,
+            is_backward_pressed: false,
+            is_left_pressed: false,
+            is_right_pressed: false,
+        }
+    }
+
+    fn process_events(&mut self, event: &WindowEvent) -> bool {
+        match event {
+            WindowEvent::KeyboardInput {
+                input:
+                    KeyboardInput {
+                        state,
+                        virtual_keycode: Some(keycode),
+                        ..
+                    },
+                ..
+            } => {
+                let is_pressed = *state == ElementState::Pressed;
+                match keycode {
+                    VirtualKeyCode::W | VirtualKeyCode::Up => {
+                        self.is_forward_pressed = is_pressed;
+                        true
+                    }
+                    VirtualKeyCode::A | VirtualKeyCode::Left => {
+                        self.is_left_pressed = is_pressed;
+                        true
+                    }
+                    VirtualKeyCode::S | VirtualKeyCode::Down => {
+                        self.is_backward_pressed = is_pressed;
+                        true
+                    }
+                    VirtualKeyCode::D | VirtualKeyCode::Right => {
+                        self.is_right_pressed = is_pressed;
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+    fn update_camera(&self, camera: &mut Camera) {
+        let forward = camera.target - camera.eye;
+        let forward_norm = forward.normalize();
+        let forward_mag = forward.magnitude();
+        // Prevents glitching when the camera gets too close to the center of the scene.
+        if self.is_forward_pressed && forward_mag > self.speed {
+            camera.eye += forward_norm * self.speed;
+        }
+        if self.is_backward_pressed {
+            camera.eye -= forward_norm * self.speed;
+        }
+        let right = forward_norm.cross(&camera.up);
+        // Redo radius calc in case forward/backward is pressed.
+        let forward = camera.target - camera.eye;
+        let forward_mag = forward.magnitude();
+        if self.is_right_pressed {
+            // Rescale the distance between the target and the eye so
+            // that it doesn't change. The eye, therefore, still
+            // lies on the circle made by the target and eye.
+            camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
+        }
+        if self.is_left_pressed {
+            camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
+        }
+    }
+}
 struct State {
     /// The surface is where rendered images are presented (e.g. The part of the window which is
     /// drawn to).
@@ -93,6 +173,10 @@ struct State {
     diffuse_bind_group: wgpu::BindGroup,
     diffuse_texture: texture::Texture,
     camera: Camera,
+    camera_uniform: CameraUniform,
+    camera_buffer: wgpu::Buffer,
+    camera_bind_group: wgpu::BindGroup,
+    camera_controller: CameraController,
 }
 
 impl State {
@@ -105,7 +189,6 @@ impl State {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
-
         // # Safety
         //
         // The surface needs to live as long as the window that created it.
@@ -228,10 +311,32 @@ impl State {
             contents: bytemuck::cast_slice(&[camera_uniform]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
+        let camera_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("camera_bind_group_layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("camera_bind_group"),
+            layout: &camera_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
+        });
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&texture_bind_group_layout],
+                bind_group_layouts: &[&texture_bind_group_layout, &camera_bind_group_layout],
                 push_constant_ranges: &[],
             });
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -271,6 +376,7 @@ impl State {
             },
             multiview: None,
         });
+        let camera_controller = CameraController::new(0.015);
         Self {
             window,
             surface,
@@ -285,6 +391,10 @@ impl State {
             diffuse_bind_group,
             diffuse_texture,
             camera,
+            camera_uniform,
+            camera_buffer,
+            camera_bind_group,
+            camera_controller,
         }
     }
     pub fn window(&self) -> &Window {
@@ -298,10 +408,18 @@ impl State {
             self.surface.configure(&self.device, &self.config);
         }
     }
-    fn input(&mut self, _event: &WindowEvent) -> bool {
-        false
+    fn input(&mut self, event: &WindowEvent) -> bool {
+        self.camera_controller.process_events(event)
     }
-    fn update(&mut self) {}
+    fn update(&mut self) {
+        self.camera_controller.update_camera(&mut self.camera);
+        self.camera_uniform.update_projection(&self.camera);
+        self.queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[self.camera_uniform]),
+        );
+    }
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         // get_current_texture waits for the surface to provide a new `wgpu::SurfaceTexture` which
         // will be rendered to later.
@@ -347,6 +465,7 @@ impl State {
         });
         render_pass.set_pipeline(&self.render_pipeline);
         render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
+        render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
