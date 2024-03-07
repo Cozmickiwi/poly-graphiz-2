@@ -1,11 +1,61 @@
+mod texture;
+
 use std::iter::once;
 
+use nalgebra::{Matrix4, Perspective3, Point3, Vector3};
 use wgpu::util::DeviceExt;
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
     window::{Window, WindowBuilder},
 };
+
+#[rustfmt::skip]
+pub const OPENGL_TO_WGPU_MATRIX: Matrix4<f32> = Matrix4::new(
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 0.5, 0.5,
+    0.0, 0.0, 0.0, 1.0,
+);
+
+pub struct Camera {
+    eye: Point3<f32>,
+    target: Point3<f32>,
+    up: Vector3<f32>,
+    aspect: f32,
+    fov_y: f32,
+    znear: f32,
+    zfar: f32,
+}
+
+impl Camera {
+    fn build_projection_matrix(&self) -> Matrix4<f32> {
+        let view = Matrix4::look_at_rh(&self.eye, &self.target, &self.up);
+        let projection =
+            Perspective3::new(self.aspect, self.fov_y, self.znear, self.zfar).to_homogeneous();
+        return OPENGL_TO_WGPU_MATRIX * projection * view;
+    }
+}
+
+// We need this for Rust to store our data correctly for the shaders.
+#[repr(C)]
+// This is so we can store this in a buffer
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct CameraUniform {
+    view_proj: [[f32; 4]; 4],
+}
+
+impl CameraUniform {
+    fn new() -> Self {
+        Self {
+            view_proj: Matrix4::identity().into(),
+        }
+    }
+
+    fn update_projection(&mut self, camera: &Camera) {
+        self.view_proj = camera.build_projection_matrix().into();
+    }
+}
 
 struct State {
     /// The surface is where rendered images are presented (e.g. The part of the window which is
@@ -33,13 +83,16 @@ struct State {
     /// Winit window.
     window: Window,
     /// The Render Pipeline is a handle to a rendering (graphics) pipeline.
-    /// A rendering pipeline outlines the necessary procedures for transforming a 
+    /// A rendering pipeline outlines the necessary procedures for transforming a
     /// three-dimentional (3D) scene into a two-dimentional representation.
     /// In short, a rendering pipeline performs perspective projection.
     render_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
+    diffuse_bind_group: wgpu::BindGroup,
+    diffuse_texture: texture::Texture,
+    camera: Camera,
 }
 
 impl State {
@@ -58,34 +111,40 @@ impl State {
         // The surface needs to live as long as the window that created it.
         // State owns the window, so this should be safe.
         let surface = unsafe { instance.create_surface(&window) }.unwrap();
-        let adapter = instance.request_adapter(
-            &wgpu::RequestAdapterOptions {
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::default(),
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
-            },
-        ).await.unwrap();
-        let (device, queue) = adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                features: wgpu::Features::POLYGON_MODE_LINE,
-                // WebGL doesn't support all of wgpu's features, so if
-                // we're building for the web, we'll have to disable some.
-                limits: if cfg!(target_arch = "wasm32") {
-                    wgpu::Limits::downlevel_webgl2_defaults()
-                } else {
-                    wgpu::Limits::default()
+            })
+            .await
+            .unwrap();
+        let (device, queue) = adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    features: wgpu::Features::POLYGON_MODE_LINE,
+                    // WebGL doesn't support all of wgpu's features, so if
+                    // we're building for the web, we'll have to disable some.
+                    limits: if cfg!(target_arch = "wasm32") {
+                        wgpu::Limits::downlevel_webgl2_defaults()
+                    } else {
+                        wgpu::Limits::default()
+                    },
+                    label: None,
                 },
-                label: None,
-            },
-            None,
-        ).await.unwrap();
+                None,
+            )
+            .await
+            .unwrap();
         let surface_caps = surface.get_capabilities(&adapter);
         // Shader code in this tutorial assumes an sRGB surface texture. Using a different
         // one will result in all the colors coming out darker. If you want to support non
         // sRGB surfaces, you'll need to account for that when drawing to the frame.
-        let surface_format = surface_caps.formats
+        let surface_format = surface_caps
+            .formats
             .iter()
-            .copied().find(|f| f.is_srgb())
+            .copied()
+            .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -97,20 +156,91 @@ impl State {
             view_formats: Vec::new(),
         };
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
-        let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[],
-            push_constant_ranges: &[]
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(VERTICES),
+            usage: wgpu::BufferUsages::VERTEX,
         });
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytemuck::cast_slice(INDICES),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let num_indices = INDICES.len() as u32;
+        surface.configure(&device, &config);
+        let diffuse_bytes = include_bytes!("../happy-tree.png");
+        let diffuse_texture =
+            texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "../happy-tree.png")
+                .unwrap();
+        let texture_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("texture_bind_group_layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+        let diffuse_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("diffuse_bind_group"),
+            layout: &texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
+                },
+            ],
+        });
+        let camera = Camera {
+            // positon the camera 1 unit up and 2 units back
+            // +z is out of the screen
+            eye: Point3::new(0.0, 1.0, 2.0),
+            // have camera look at origin
+            target: Point3::new(0.0, 0.0, 0.0),
+            // which way is "up"
+            up: Vector3::y(),
+            aspect: config.width as f32 / config.height as f32,
+            fov_y: 45.0,
+            znear: 0.1,
+            zfar: 100.0,
+        };
+        let mut camera_uniform = CameraUniform::new();
+        camera_uniform.update_projection(&camera);
+        let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Camera Buffer"),
+            contents: bytemuck::cast_slice(&[camera_uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Render Pipeline Layout"),
+                bind_group_layouts: &[&texture_bind_group_layout],
+                push_constant_ranges: &[],
+            });
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",
-                buffers: &[
-                    Vertex::desc(),
-                ],
+                buffers: &[Vertex::desc()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -141,23 +271,6 @@ impl State {
             },
             multiview: None,
         });
-
-        let vertex_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Vertex Buffer"),
-                contents: bytemuck::cast_slice(VERTICES),
-                usage: wgpu::BufferUsages::VERTEX,
-            }
-        );
-        let index_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(INDICES),
-                usage: wgpu::BufferUsages::INDEX,
-            }
-        );
-        let num_indices = INDICES.len() as u32;
-        surface.configure(&device, &config);
         Self {
             window,
             surface,
@@ -169,6 +282,9 @@ impl State {
             vertex_buffer,
             index_buffer,
             num_indices,
+            diffuse_bind_group,
+            diffuse_texture,
+            camera,
         }
     }
     pub fn window(&self) -> &Window {
@@ -191,13 +307,17 @@ impl State {
         // will be rendered to later.
         let output = self.surface.get_current_texture()?;
         // Create a `wgpu::Textureview` with default settings.
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         // Create a command encoder.
         // The command encoder creates the commands to send to the GPU. The commands are sent as a
         // command buffer.
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
         // Use the encoder to create a `wgpu::RenderPass`.
         // The `wgpu::RenderPass` has all the methods for the actual drawing.
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -206,7 +326,7 @@ impl State {
             // RenderPassColorAttachment has the view field, which informs wgpu what texture to
             // save the colors to.
             // Here we are using the view variable we created earlier as the view. This means any
-            // colors drawn to this attachment will get drawn to the screen. 
+            // colors drawn to this attachment will get drawn to the screen.
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
                 resolve_target: None,
@@ -216,16 +336,17 @@ impl State {
                         r: 0.1,
                         g: 0.2,
                         b: 0.3,
-                        a: 1.0
+                        a: 1.0,
                     }),
                     store: wgpu::StoreOp::Store,
-                }
+                },
             })],
             depth_stencil_attachment: None,
             timestamp_writes: None,
-            occlusion_query_set: None
+            occlusion_query_set: None,
         });
         render_pass.set_pipeline(&self.render_pipeline);
+        render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
@@ -242,7 +363,7 @@ impl State {
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
     position: [f32; 3],
-    color: [f32; 3],
+    tex_coords: [f32; 2],
 }
 
 impl Vertex {
@@ -259,32 +380,38 @@ impl Vertex {
                 wgpu::VertexAttribute {
                     offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x3,
-                }
+                    format: wgpu::VertexFormat::Float32x2,
+                },
             ],
         }
     }
 }
 
-const VERTICES1: &[Vertex] = &[
-    Vertex { position: [0.0, 0.5, 0.0], color: [1.0, 0.0, 0.0] },
-    Vertex { position: [-0.5, -0.5, 0.0], color: [0.0, 1.0, 0.0] },
-    Vertex { position: [0.5, -0.5, 0.0], color: [0.0, 0.0, 1.0] },
-];
-
 const VERTICES: &[Vertex] = &[
-    Vertex { position: [-0.0868241, 0.49240386, 0.0], color: [0.5, 0.0, 0.5] }, // A
-    Vertex { position: [-0.49513406, 0.06958647, 0.0], color: [0.5, 0.0, 0.5] }, // B
-    Vertex { position: [-0.21918549, -0.44939706, 0.0], color: [0.5, 0.0, 0.5] }, // C
-    Vertex { position: [0.35966998, -0.3473291, 0.0], color: [0.5, 0.0, 0.5] }, // D
-    Vertex { position: [0.44147372, 0.2347359, 0.0], color: [0.5, 0.0, 0.5] }, // E
+    // Changed
+    Vertex {
+        position: [-0.0868241, 0.49240386, 0.0],
+        tex_coords: [0.4131759, 0.00759614],
+    }, // A
+    Vertex {
+        position: [-0.49513406, 0.06958647, 0.0],
+        tex_coords: [0.0048659444, 0.43041354],
+    }, // B
+    Vertex {
+        position: [-0.21918549, -0.44939706, 0.0],
+        tex_coords: [0.28081453, 0.949397],
+    }, // C
+    Vertex {
+        position: [0.35966998, -0.3473291, 0.0],
+        tex_coords: [0.85967, 0.84732914],
+    }, // D
+    Vertex {
+        position: [0.44147372, 0.2347359, 0.0],
+        tex_coords: [0.9414737, 0.2652641],
+    }, // E
 ];
 
-const INDICES: &[u16] = &[
-    0, 1, 4,
-    1, 2, 4,
-    2, 3, 4,
-];
+const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
 
 pub async fn run() {
     // Create event loop
@@ -293,12 +420,13 @@ pub async fn run() {
     let window = WindowBuilder::new().build(&event_loop).unwrap();
     let mut state = State::new(window).await;
     // Initialize event loop
-    event_loop.run(move |event, _, control_flow|  match event {
+    event_loop.run(move |event, _, control_flow| match event {
         // Check if os has sent an event to the window
         Event::WindowEvent {
             ref event,
             window_id,
-        } if window_id == state.window.id() => if !state.input(event) {
+        } if window_id == state.window.id() => {
+            if !state.input(event) {
                 match event {
                     // Close the window when close has been requested (e.g window close button pressed) or escape is pressed
                     WindowEvent::CloseRequested
@@ -320,6 +448,7 @@ pub async fn run() {
                     _ => {}
                 }
             }
+        }
         Event::RedrawRequested(window_id) if window_id == state.window().id() => {
             state.update();
             match state.render() {
