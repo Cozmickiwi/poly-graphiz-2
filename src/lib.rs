@@ -1,9 +1,9 @@
 mod texture;
 
-use std::{iter::once, time::Instant};
+use std::{iter::once};
 
 use nalgebra::{
-    ComplexField, Matrix4, Perspective3, Point2, Point3, RealField, Rotation3, Translation3,
+    ComplexField, Matrix4, Perspective3, Point3, RealField, Rotation3, Translation3,
     Vector3,
 };
 use wgpu::util::DeviceExt;
@@ -140,7 +140,6 @@ impl CameraController {
     }
     fn update_camera(&self, camera: &mut Camera) {
         let forward = camera.target - camera.eye;
-        let forward_norm = forward.normalize();
         let forward_mag = forward.magnitude();
         let angle = (camera.target.x - camera.eye.x).atan2(camera.target.z - camera.eye.z);
         let dist = 0.001;
@@ -148,43 +147,24 @@ impl CameraController {
         let dist_cos = dist * angle.cos();
         // Prevents glitching when the camera gets too close to the center of the scene.
         if self.is_forward_pressed && forward_mag > self.speed {
-            //            camera.eye += forward_norm * self.speed;
-            //            camera.target += forward_norm * self.speed;
             camera.eye.x += dist_sin;
             camera.eye.z += dist_cos;
             camera.target.x += dist_sin;
             camera.target.z += dist_cos;
         }
         if self.is_backward_pressed {
-            //            camera.eye -= forward_norm * self.speed;
-            //            camera.target += forward_norm * self.speed;
             camera.eye.x -= dist_sin;
             camera.eye.z -= dist_cos;
             camera.target.x -= dist_sin;
             camera.target.z -= dist_cos;
         }
-        let right = forward_norm.cross(&camera.up);
-        // Redo radius calc in case forward/backward is pressed.
-        let forward = camera.target - camera.eye;
-        let forward_mag = forward.magnitude();
-
         if self.is_right_pressed {
-            // Rescale the distance between the target and the eye so
-            // that it doesn't change. The eye, therefore, still
-            // lies on the circle made by the target and eye.
-            //camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
-            //           camera.target = rotate_point(camera.eye, camera.target, 0.01_f32.to_radians(), 'y');
-
             camera.eye.x -= dist_cos;
             camera.eye.z += dist_sin;
             camera.target.x -= dist_cos;
             camera.target.z += dist_sin;
-
-            //            println!("{}", camera.target);
         }
         if self.is_left_pressed {
-            //            camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
-            //            camera.target = rotate_point(camera.eye, camera.target, -0.01_f32.to_radians(), 'y');
             camera.eye.x += dist_cos;
             camera.eye.z -= dist_sin;
             camera.target.x += dist_cos;
@@ -218,8 +198,8 @@ pub fn rotate_point(point: Point3<f32>, target: Point3<f32>, rot: f32, ax: char)
     let translated_point = origin_translation * target;
     let rotated_point = rotation_matrix.transform_point(&translated_point);
     let translation_back = Translation3::from(point.coords);
-    let t = translation_back * rotated_point;
-    t
+    
+    translation_back * rotated_point
 }
 
 struct State {
