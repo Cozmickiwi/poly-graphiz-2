@@ -1,10 +1,9 @@
 mod texture;
 
-use std::{iter::once};
+use std::{fs::File, io::Read, iter::once, time::Instant};
 
 use nalgebra::{
-    ComplexField, Matrix4, Perspective3, Point3, RealField, Rotation3, Translation3,
-    Vector3,
+    ComplexField, Matrix4, Perspective3, Point3, RealField, Rotation3, Translation3, Vector3,
 };
 use wgpu::util::DeviceExt;
 use winit::{
@@ -70,6 +69,8 @@ struct CameraController {
     is_j_pressed: bool,
     is_k_pressed: bool,
     is_l_pressed: bool,
+    is_space_pressed: bool,
+    is_shift_pressed: bool,
 }
 
 impl CameraController {
@@ -84,6 +85,8 @@ impl CameraController {
             is_j_pressed: false,
             is_k_pressed: false,
             is_l_pressed: false,
+            is_space_pressed: false,
+            is_shift_pressed: false,
         }
     }
 
@@ -132,17 +135,25 @@ impl CameraController {
                         self.is_l_pressed = is_pressed;
                         true
                     }
+                    VirtualKeyCode::Space => {
+                        self.is_space_pressed = is_pressed;
+                        true
+                    }
+                    VirtualKeyCode::LShift => {
+                        self.is_shift_pressed = is_pressed;
+                        true
+                    }
                     _ => false,
                 }
             }
             _ => false,
         }
     }
-    fn update_camera(&self, camera: &mut Camera) {
+    fn update_camera(&self, camera: &mut Camera, delta: f32) {
         let forward = camera.target - camera.eye;
         let forward_mag = forward.magnitude();
         let angle = (camera.target.x - camera.eye.x).atan2(camera.target.z - camera.eye.z);
-        let dist = 0.001;
+        let dist = 0.05 * delta;
         let dist_sin = dist * angle.sin();
         let dist_cos = dist * angle.cos();
         // Prevents glitching when the camera gets too close to the center of the scene.
@@ -171,16 +182,37 @@ impl CameraController {
             camera.target.z -= dist_sin;
         }
         if self.is_h_pressed {
-            camera.target = rotate_point(camera.eye, camera.target, -0.01_f32.to_radians(), 'y');
+            camera.target = rotate_point(
+                camera.eye,
+                camera.target,
+                -(0.5_f32.to_radians() * delta),
+                'y',
+            );
         }
         if self.is_j_pressed {
-            camera.target = rotate_point(camera.eye, camera.target, 0.01_f32.to_radians(), 'x');
+            //            camera.target = rotate_point(camera.eye, camera.target, 0.12_f32.to_radians(), 'x');
+            if camera.target.y > camera.eye.y - 2.0 {
+                camera.target.y -= 0.01 * delta;
+            }
         }
         if self.is_k_pressed {
-            camera.target = rotate_point(camera.eye, camera.target, -0.01_f32.to_radians(), 'x');
+            //            camera.target = rotate_point(camera.eye, camera.target, -0.12_f32.to_radians(), 'x');
+            if camera.target.y < camera.eye.y + 2.0 {
+                camera.target.y += 0.01 * delta;
+            }
         }
         if self.is_l_pressed {
-            camera.target = rotate_point(camera.eye, camera.target, 0.01_f32.to_radians(), 'y');
+            camera.target =
+                rotate_point(camera.eye, camera.target, 0.5_f32.to_radians() * delta, 'y');
+        }
+        if self.is_space_pressed {
+            if self.is_shift_pressed {
+                camera.eye.y -= dist;
+                camera.target.y -= dist;
+            } else {
+                camera.eye.y += dist;
+                camera.target.y += dist;
+            }
         }
     }
 }
@@ -198,8 +230,34 @@ pub fn rotate_point(point: Point3<f32>, target: Point3<f32>, rot: f32, ax: char)
     let translated_point = origin_translation * target;
     let rotated_point = rotation_matrix.transform_point(&translated_point);
     let translation_back = Translation3::from(point.coords);
-    
+
     translation_back * rotated_point
+}
+
+pub fn parse_obj() -> (Vec<[f32; 3]>, Vec<u32>) {
+    let mut file = File::open("models/dragon2.obj").unwrap();
+    let mut buffer = String::new();
+    file.read_to_string(&mut buffer).unwrap();
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for line in buffer.lines() {
+        let split_line: Vec<&str> = line.split_whitespace().collect();
+        if split_line[0] == "v" {
+            let x: f32 = split_line[1].parse().unwrap();
+            let y: f32 = split_line[2].parse().unwrap();
+            let z: f32 = split_line[3].parse().unwrap();
+            vertices.push([x, y, z]);
+        } else if split_line[0] == "f" {
+            //let mut i_list = Vec::new();
+            for i in 1..4 {
+                let vs: Vec<&str> = split_line[i].split('/').collect();
+                let v: u32 = vs[0].parse().unwrap();
+                indices.push(v - 1);
+            }
+            //indices.push([i_list[0], i_list[1], i_list[2]]);
+        }
+    }
+    (vertices, indices)
 }
 
 struct State {
@@ -261,7 +319,7 @@ impl State {
         let surface = unsafe { instance.create_surface(&window) }.unwrap();
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::default(),
+                power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             })
@@ -299,22 +357,34 @@ impl State {
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: surface_caps.present_modes[0],
+            //present_mode: surface_caps.present_modes[0],
+            present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: Vec::new(),
         };
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+        let (model_ver, model_ind) = parse_obj();
+        let mut parsed_vertices = Vec::new();
+        for i in model_ver {
+            parsed_vertices.push(Vertex {
+                position: i,
+                tex_coords: [0.0; 2],
+            })
+        }
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(VERTICES),
+            //            contents: bytemuck::cast_slice(VERTICES),
+            contents: bytemuck::cast_slice(parsed_vertices.as_slice()),
             usage: wgpu::BufferUsages::VERTEX,
         });
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(INDICES),
+            //            contents: bytemuck::cast_slice(INDICES),
+            contents: bytemuck::cast_slice(model_ind.as_slice()),
             usage: wgpu::BufferUsages::INDEX,
         });
-        let num_indices = INDICES.len() as u32;
+        //let num_indices = INDICES.len() as u32;
+        let num_indices = model_ind.len() as u32;
         surface.configure(&device, &config);
         let diffuse_bytes = include_bytes!("../happy-tree.png");
         let diffuse_texture =
@@ -359,9 +429,9 @@ impl State {
         let camera = Camera {
             // positon the camera 1 unit up and 2 units back
             // +z is out of the screen
-            eye: Point3::new(0.0, 0.0, 2.0),
+            eye: Point3::new(0.0, 2.0, 2.0),
             // have camera look at origin
-            target: Point3::new(0.0, 0.0, 0.0),
+            target: Point3::new(0.0, 2.0, 0.0),
             // which way is "up"
             up: Vector3::y(),
             aspect: config.width as f32 / config.height as f32,
@@ -429,7 +499,7 @@ impl State {
                 // Requires Features::DEPTH_CLIP_CONTROL
                 unclipped_depth: false,
                 // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
-                polygon_mode: wgpu::PolygonMode::Fill,
+                polygon_mode: wgpu::PolygonMode::Line,
                 // Requires Features::CONSERVATIVE_RASTERIZATION
                 conservative: false,
             },
@@ -476,8 +546,9 @@ impl State {
     fn input(&mut self, event: &WindowEvent) -> bool {
         self.camera_controller.process_events(event)
     }
-    fn update(&mut self) {
-        self.camera_controller.update_camera(&mut self.camera);
+    fn update(&mut self, delta: f32) {
+        self.camera_controller
+            .update_camera(&mut self.camera, delta);
         self.camera_uniform.update_projection(&self.camera);
         self.queue.write_buffer(
             &self.camera_buffer,
@@ -516,9 +587,13 @@ impl State {
                 ops: wgpu::Operations {
                     // Clear screen
                     load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.1,
+                        /*r: 0.1,
                         g: 0.2,
                         b: 0.3,
+                        a: 1.0,*/
+                        r: 0.0,
+                        g: 0.0,
+                        b: 0.0,
                         a: 1.0,
                     }),
                     store: wgpu::StoreOp::Store,
@@ -532,7 +607,7 @@ impl State {
         render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
         render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
         drop(render_pass);
         // Tell wgpu to finish the command buffer and submit it to the GPU's render queue.
@@ -601,7 +676,10 @@ pub async fn run() {
     // Create event loop
     let event_loop = EventLoop::new();
     // Create and initialize the window
-    let window = WindowBuilder::new().build(&event_loop).unwrap();
+    let window = WindowBuilder::new()
+        .with_maximized(true)
+        .build(&event_loop)
+        .unwrap();
     let mut state = State::new(window).await;
     let test_rotation = rotate_point(
         state.camera.eye,
@@ -610,6 +688,7 @@ pub async fn run() {
         'z',
     );
     println!("{:?}", test_rotation);
+    let mut frame_timer = Instant::now();
     // Initialize event loop
     event_loop.run(move |event, _, control_flow| match event {
         // Check if os has sent an event to the window
@@ -641,7 +720,12 @@ pub async fn run() {
             }
         }
         Event::RedrawRequested(window_id) if window_id == state.window().id() => {
-            state.update();
+            //            let now = Instant::now();
+            let delta = 144.0 * frame_timer.elapsed().as_secs_f32();
+            frame_timer = Instant::now();
+            state.update(delta);
+            //let elapsed = now.elapsed();
+            //let now = Instant::now();
             match state.render() {
                 Ok(_) => {}
                 // Reconfigure the surface if lost
@@ -651,6 +735,8 @@ pub async fn run() {
                 // All other errors (Outdated, Timeout) should be resolved by the next frame
                 Err(e) => eprintln!("{:?}", e),
             }
+            //            println!("update: {:?}", elapsed);
+            //            println!("render: {:?}", now.elapsed());
         }
         Event::MainEventsCleared => {
             // RedrawRequested will only trigger once unless we manually request it.
