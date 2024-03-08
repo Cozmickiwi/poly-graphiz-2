@@ -1,8 +1,11 @@
 mod texture;
 
-use std::iter::once;
+use std::{iter::once, time::Instant};
 
-use nalgebra::{Matrix4, Perspective3, Point3, Vector3};
+use nalgebra::{
+    ComplexField, Matrix4, Perspective3, Point2, Point3, RealField, Rotation3, Translation3,
+    Vector3,
+};
 use wgpu::util::DeviceExt;
 use winit::{
     event::*,
@@ -33,7 +36,7 @@ impl Camera {
         let view = Matrix4::look_at_rh(&self.eye, &self.target, &self.up);
         let projection =
             Perspective3::new(self.aspect, self.fov_y, self.znear, self.zfar).to_homogeneous();
-        return OPENGL_TO_WGPU_MATRIX * projection * view;
+        OPENGL_TO_WGPU_MATRIX * projection * view
     }
 }
 
@@ -63,6 +66,10 @@ struct CameraController {
     is_backward_pressed: bool,
     is_left_pressed: bool,
     is_right_pressed: bool,
+    is_h_pressed: bool,
+    is_j_pressed: bool,
+    is_k_pressed: bool,
+    is_l_pressed: bool,
 }
 
 impl CameraController {
@@ -73,6 +80,10 @@ impl CameraController {
             is_backward_pressed: false,
             is_left_pressed: false,
             is_right_pressed: false,
+            is_h_pressed: false,
+            is_j_pressed: false,
+            is_k_pressed: false,
+            is_l_pressed: false,
         }
     }
 
@@ -105,6 +116,22 @@ impl CameraController {
                         self.is_right_pressed = is_pressed;
                         true
                     }
+                    VirtualKeyCode::H => {
+                        self.is_h_pressed = is_pressed;
+                        true
+                    }
+                    VirtualKeyCode::J => {
+                        self.is_j_pressed = is_pressed;
+                        true
+                    }
+                    VirtualKeyCode::K => {
+                        self.is_k_pressed = is_pressed;
+                        true
+                    }
+                    VirtualKeyCode::L => {
+                        self.is_l_pressed = is_pressed;
+                        true
+                    }
                     _ => false,
                 }
             }
@@ -115,28 +142,86 @@ impl CameraController {
         let forward = camera.target - camera.eye;
         let forward_norm = forward.normalize();
         let forward_mag = forward.magnitude();
+        let angle = (camera.target.x - camera.eye.x).atan2(camera.target.z - camera.eye.z);
+        let dist = 0.001;
+        let dist_sin = dist * angle.sin();
+        let dist_cos = dist * angle.cos();
         // Prevents glitching when the camera gets too close to the center of the scene.
         if self.is_forward_pressed && forward_mag > self.speed {
-            camera.eye += forward_norm * self.speed;
+            //            camera.eye += forward_norm * self.speed;
+            //            camera.target += forward_norm * self.speed;
+            camera.eye.x += dist_sin;
+            camera.eye.z += dist_cos;
+            camera.target.x += dist_sin;
+            camera.target.z += dist_cos;
         }
         if self.is_backward_pressed {
-            camera.eye -= forward_norm * self.speed;
+            //            camera.eye -= forward_norm * self.speed;
+            //            camera.target += forward_norm * self.speed;
+            camera.eye.x -= dist_sin;
+            camera.eye.z -= dist_cos;
+            camera.target.x -= dist_sin;
+            camera.target.z -= dist_cos;
         }
         let right = forward_norm.cross(&camera.up);
         // Redo radius calc in case forward/backward is pressed.
         let forward = camera.target - camera.eye;
         let forward_mag = forward.magnitude();
+
         if self.is_right_pressed {
             // Rescale the distance between the target and the eye so
             // that it doesn't change. The eye, therefore, still
             // lies on the circle made by the target and eye.
-            camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
+            //camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
+            //           camera.target = rotate_point(camera.eye, camera.target, 0.01_f32.to_radians(), 'y');
+
+            camera.eye.x -= dist_cos;
+            camera.eye.z += dist_sin;
+            camera.target.x -= dist_cos;
+            camera.target.z += dist_sin;
+
+            //            println!("{}", camera.target);
         }
         if self.is_left_pressed {
-            camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
+            //            camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
+            //            camera.target = rotate_point(camera.eye, camera.target, -0.01_f32.to_radians(), 'y');
+            camera.eye.x += dist_cos;
+            camera.eye.z -= dist_sin;
+            camera.target.x += dist_cos;
+            camera.target.z -= dist_sin;
+        }
+        if self.is_h_pressed {
+            camera.target = rotate_point(camera.eye, camera.target, -0.01_f32.to_radians(), 'y');
+        }
+        if self.is_j_pressed {
+            camera.target = rotate_point(camera.eye, camera.target, 0.01_f32.to_radians(), 'x');
+        }
+        if self.is_k_pressed {
+            camera.target = rotate_point(camera.eye, camera.target, -0.01_f32.to_radians(), 'x');
+        }
+        if self.is_l_pressed {
+            camera.target = rotate_point(camera.eye, camera.target, 0.01_f32.to_radians(), 'y');
         }
     }
 }
+
+pub fn rotate_point(point: Point3<f32>, target: Point3<f32>, rot: f32, ax: char) -> Point3<f32> {
+    let axis;
+    match ax {
+        'x' => axis = Vector3::x_axis(),
+        'y' => axis = Vector3::y_axis(),
+        'z' => axis = Vector3::z_axis(),
+        _ => panic!(),
+    }
+    let origin_translation = Translation3::from(-point.coords);
+    let rotation_matrix = Rotation3::from_axis_angle(&axis, -rot);
+    let translated_point = origin_translation * target;
+    let rotated_point = rotation_matrix.transform_point(&translated_point);
+    let translation_back = Translation3::from(point.coords);
+    let t = translation_back * rotated_point;
+    t
+}
+
 struct State {
     /// The surface is where rendered images are presented (e.g. The part of the window which is
     /// drawn to).
@@ -294,7 +379,7 @@ impl State {
         let camera = Camera {
             // positon the camera 1 unit up and 2 units back
             // +z is out of the screen
-            eye: Point3::new(0.0, 1.0, 2.0),
+            eye: Point3::new(0.0, 0.0, 2.0),
             // have camera look at origin
             target: Point3::new(0.0, 0.0, 0.0),
             // which way is "up"
@@ -376,7 +461,7 @@ impl State {
             },
             multiview: None,
         });
-        let camera_controller = CameraController::new(0.015);
+        let camera_controller = CameraController::new(0.0015);
         Self {
             window,
             surface,
@@ -538,6 +623,13 @@ pub async fn run() {
     // Create and initialize the window
     let window = WindowBuilder::new().build(&event_loop).unwrap();
     let mut state = State::new(window).await;
+    let test_rotation = rotate_point(
+        state.camera.eye,
+        state.camera.target,
+        -90.0_f32.to_radians(),
+        'z',
+    );
+    println!("{:?}", test_rotation);
     // Initialize event loop
     event_loop.run(move |event, _, control_flow| match event {
         // Check if os has sent an event to the window
