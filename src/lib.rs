@@ -234,6 +234,35 @@ pub fn rotate_point(point: Point3<f32>, target: Point3<f32>, rot: f32, ax: char)
     translation_back * rotated_point
 }
 
+fn rotate_points(
+    point: Point3<f32>,
+    targets: &Vec<Vertex>,
+    rot: f32,
+    ax: char,
+) -> Vec<Vertex> {
+    let axis;
+    match ax {
+        'x' => axis = Vector3::x_axis(),
+        'y' => axis = Vector3::y_axis(),
+        'z' => axis = Vector3::z_axis(),
+        _ => panic!(),
+    }
+    let origin_translation = Translation3::from(-point.coords);
+    let rotation_matrix = Rotation3::from_axis_angle(&axis, -rot);
+    let mut r_points = Vec::new();
+    for t in targets {
+        let translated_point = origin_translation * Point3::from(t.position);
+        let rotated_point = rotation_matrix.transform_point(&translated_point);
+        let translation_back = Translation3::from(point.coords);
+        let pos = (translation_back * rotated_point).coords;
+        r_points.push(Vertex{
+            position: [pos.x, pos.y, pos.z],
+            tex_coords: [0.0, 2.0],
+        });
+    }
+    r_points
+}
+
 pub fn parse_obj() -> (Vec<[f32; 3]>, Vec<u32>) {
     let mut file = File::open("models/dragon2.obj").unwrap();
     let mut buffer = String::new();
@@ -300,6 +329,7 @@ struct State {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     camera_controller: CameraController,
+    obj_vertices: Vec<Vertex>,
 }
 
 impl State {
@@ -530,6 +560,7 @@ impl State {
             camera_buffer,
             camera_bind_group,
             camera_controller,
+            obj_vertices: parsed_vertices,
         }
     }
     pub fn window(&self) -> &Window {
@@ -555,6 +586,15 @@ impl State {
             0,
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
+        
+        self.obj_vertices = rotate_points(Point3::new(0.0, 0.0, 0.0), &self.obj_vertices, 0.001, 'y');
+        let vertex_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            //            contents: bytemuck::cast_slice(VERTICES),
+            contents: bytemuck::cast_slice(self.obj_vertices.as_slice()),
+            usage: wgpu::BufferUsages::VERTEX,
+        }); 
+        self.vertex_buffer = vertex_buffer;
     }
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         // get_current_texture waits for the surface to provide a new `wgpu::SurfaceTexture` which
