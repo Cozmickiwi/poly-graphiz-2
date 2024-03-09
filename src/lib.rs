@@ -5,6 +5,7 @@ use std::{fs::File, io::Read, iter::once, time::Instant};
 use nalgebra::{
     ComplexField, Matrix4, Perspective3, Point3, RealField, Rotation3, Translation3, Vector3,
 };
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use wgpu::util::DeviceExt;
 use winit::{
     event::*,
@@ -20,13 +21,21 @@ pub const OPENGL_TO_WGPU_MATRIX: Matrix4<f32> = Matrix4::new(
     0.0, 0.0, 0.0, 1.0,
 );
 
+/// The camera is the point of view from which the scene is rendered.
 pub struct Camera {
+    /// The position of the camera.
     eye: Point3<f32>,
+    /// The target of the camera. The target is the point the camera is looking at.
     target: Point3<f32>,
+    /// The up vector of the camera. The up vector is the direction which is considered up.
     up: Vector3<f32>,
+    /// The aspect ratio of the camera.
     aspect: f32,
+    /// The field of view of the camera in the y direction.
     fov_y: f32,
+    /// The near clipping plane of the camera.
     znear: f32,
+    /// The far clipping plane of the camera.
     zfar: f32,
 }
 
@@ -43,22 +52,28 @@ impl Camera {
 #[repr(C)]
 // This is so we can store this in a buffer
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+/// The camera uniform is a struct which stores the projection matrix of the camera.
 struct CameraUniform {
+    /// The projection matrix of the camera. The projection matrix is used to transform the 3D
+    /// scene into a 2D representation.
     view_proj: [[f32; 4]; 4],
 }
 
 impl CameraUniform {
+    /// Constructs a new `CameraUniform`.
     fn new() -> Self {
         Self {
             view_proj: Matrix4::identity().into(),
         }
     }
-
+    /// Updates the projection matrix of the camera.
     fn update_projection(&mut self, camera: &Camera) {
         self.view_proj = camera.build_projection_matrix().into();
     }
 }
 
+/// The camera controller is used to control the camera's position and target.
+/// The camera controller is updated based on the keyboard input.
 struct CameraController {
     speed: f32,
     is_forward_pressed: bool,
@@ -74,6 +89,7 @@ struct CameraController {
 }
 
 impl CameraController {
+    /// Constructs a new `CameraController`.
     fn new(speed: f32) -> Self {
         Self {
             speed,
@@ -90,6 +106,15 @@ impl CameraController {
         }
     }
 
+    /// Processes the events sent to the window. This function is used to update the state of the
+    /// camera controller based on the keyboard input.
+    ///
+    ///
+    /// # Arguments
+    ///
+    /// * `event`:
+    ///
+    /// returns: bool
     fn process_events(&mut self, event: &WindowEvent) -> bool {
         match event {
             WindowEvent::KeyboardInput {
@@ -149,11 +174,12 @@ impl CameraController {
             _ => false,
         }
     }
+    /// Updates the camera's position and target based on the keyboard input.
     fn update_camera(&self, camera: &mut Camera, delta: f32) {
         let forward = camera.target - camera.eye;
         let forward_mag = forward.magnitude();
         let angle = (camera.target.x - camera.eye.x).atan2(camera.target.z - camera.eye.z);
-        let dist = 0.05 * delta;
+        let dist = 0.065 * delta;
         let dist_sin = dist * angle.sin();
         let dist_cos = dist * angle.cos();
         // Prevents glitching when the camera gets too close to the center of the scene.
@@ -192,13 +218,13 @@ impl CameraController {
         if self.is_j_pressed {
             //            camera.target = rotate_point(camera.eye, camera.target, 0.12_f32.to_radians(), 'x');
             if camera.target.y > camera.eye.y - 2.0 {
-                camera.target.y -= 0.01 * delta;
+                camera.target.y -= 0.015 * delta;
             }
         }
         if self.is_k_pressed {
             //            camera.target = rotate_point(camera.eye, camera.target, -0.12_f32.to_radians(), 'x');
             if camera.target.y < camera.eye.y + 2.0 {
-                camera.target.y += 0.01 * delta;
+                camera.target.y += 0.015 * delta;
             }
         }
         if self.is_l_pressed {
@@ -207,16 +233,28 @@ impl CameraController {
         }
         if self.is_space_pressed {
             if self.is_shift_pressed {
-                camera.eye.y -= dist;
-                camera.target.y -= dist;
+                camera.eye.y -= dist * 1.5;
+                camera.target.y -= dist * 1.5;
             } else {
-                camera.eye.y += dist;
-                camera.target.y += dist;
+                camera.eye.y += dist * 1.5;
+                camera.target.y += dist * 1.5;
             }
         }
     }
 }
 
+/// Rotates a point around a target point. The rotation is done in 3D space. The rotation is
+/// performed around the specified axis.
+///
+///
+/// # Arguments
+///
+/// * `point`:
+/// * `target`:
+/// * `rot`:
+/// * `ax`:
+///
+/// returns: OPoint<f32, Const<3>>
 pub fn rotate_point(point: Point3<f32>, target: Point3<f32>, rot: f32, ax: char) -> Point3<f32> {
     let axis;
     match ax {
@@ -234,12 +272,19 @@ pub fn rotate_point(point: Point3<f32>, target: Point3<f32>, rot: f32, ax: char)
     translation_back * rotated_point
 }
 
-fn rotate_points(
-    point: Point3<f32>,
-    targets: &Vec<Vertex>,
-    rot: f32,
-    ax: char,
-) -> Vec<Vertex> {
+/// Rotates a list of points around a target point. The rotation is done in 3D space. The rotation
+/// is performed around the specified axis.
+///
+///
+/// # Arguments
+///
+/// * `point`:
+/// * `targets`:
+/// * `rot`:
+/// * `ax`:
+///
+/// returns: Vec<Vertex, Global>
+fn rotate_points(point: Point3<f32>, targets: &Vec<Vertex>, rot: f32, ax: char) -> Vec<Vertex> {
     let axis;
     match ax {
         'x' => axis = Vector3::x_axis(),
@@ -248,21 +293,37 @@ fn rotate_points(
         _ => panic!(),
     }
     let origin_translation = Translation3::from(-point.coords);
+    //let now = Instant::now();
     let rotation_matrix = Rotation3::from_axis_angle(&axis, -rot);
-    let mut r_points = Vec::new();
-    for t in targets {
-        let translated_point = origin_translation * Point3::from(t.position);
-        let rotated_point = rotation_matrix.transform_point(&translated_point);
-        let translation_back = Translation3::from(point.coords);
-        let pos = (translation_back * rotated_point).coords;
-        r_points.push(Vertex{
-            position: [pos.x, pos.y, pos.z],
-            tex_coords: [0.0, 2.0],
-        });
-    }
+    let translation_back = Translation3::from(point.coords);
+    let r_points = targets
+        .par_iter()
+        .map(|t| {
+            if t.position[1] == 0.0 {
+                return *t;
+            }
+            let translated_point = origin_translation * Point3::from(t.position);
+            let rotated_point = rotation_matrix.transform_point(&translated_point);
+            let pos = (translation_back * rotated_point).coords;
+            Vertex {
+                position: [pos.x, pos.y, pos.z],
+                tex_coords: t.tex_coords,
+            }
+        })
+        .collect();
+    //let el = now.elapsed();
+    //println!("{:?}", el);
     r_points
 }
 
+/// Parses the obj file and returns the vertices and indices.
+///
+///
+/// # Arguments
+///
+///
+///
+/// returns: (Vec<[f32; 3]>, Vec<u32>)
 pub fn parse_obj() -> (Vec<[f32; 3]>, Vec<u32>) {
     let mut file = File::open("models/dragon2.obj").unwrap();
     let mut buffer = String::new();
@@ -289,6 +350,8 @@ pub fn parse_obj() -> (Vec<[f32; 3]>, Vec<u32>) {
     (vertices, indices)
 }
 
+/// The state of the program. This is where the main logic of the program is stored.
+/// This is the first struct that is created when the program is run.
 struct State {
     /// The surface is where rendered images are presented (e.g. The part of the window which is
     /// drawn to).
@@ -317,22 +380,45 @@ struct State {
     /// The Render Pipeline is a handle to a rendering (graphics) pipeline.
     /// A rendering pipeline outlines the necessary procedures for transforming a
     /// three-dimentional (3D) scene into a two-dimentional representation.
-    /// In short, a rendering pipeline performs perspective projection.
     render_pipeline: wgpu::RenderPipeline,
+    /// The vertex buffer is a handle to a buffer which stores vertex data.
+    /// Vertex data is used to describe the shape of a 3D object by defining points (vertices).
+    /// The index buffer stores the conncections between vertices.
     vertex_buffer: wgpu::Buffer,
+    /// The index buffer is a handle to a buffer which stores index data.
+    /// Index data is used to describe the connections between vertices.
     index_buffer: wgpu::Buffer,
     num_indices: u32,
+    /// The diffuse bind group is a handle to a bind group which stores the diffuse texture.
+    /// A bind group is a collection of resources which are bound to the pipeline. These resources
+    /// are used in the shaders.
     diffuse_bind_group: wgpu::BindGroup,
+    /// The diffuse texture is a handle to a texture which stores the color data of the diffuse
+    /// texture.
     diffuse_texture: texture::Texture,
+    /// The camera is the point of view from which the scene is rendered.
     camera: Camera,
+    /// The camera uniform is a struct which stores the camera's view and projection.
     camera_uniform: CameraUniform,
+    /// The camera buffer is a handle to a buffer which stores the camera's view and projection
+    /// data.
+    /// The camera buffer is used to update the camera's view and projection in the shaders.
     camera_buffer: wgpu::Buffer,
+    /// The camera bind group is a handle to a bind group which stores the camera buffer.
     camera_bind_group: wgpu::BindGroup,
     camera_controller: CameraController,
     obj_vertices: Vec<Vertex>,
 }
 
 impl State {
+    /// Constructs a new `State`.
+    ///
+    ///
+    /// # Arguments
+    ///
+    /// * `window`:
+    ///
+    /// returns: State
     // Creating some of the wgpu types requires async code
     async fn new(window: Window) -> Self {
         let size = window.inner_size();
@@ -387,8 +473,8 @@ impl State {
             format: surface_format,
             width: size.width,
             height: size.height,
-            //present_mode: surface_caps.present_modes[0],
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode: surface_caps.present_modes[0],
+            //present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: Vec::new(),
         };
@@ -396,9 +482,15 @@ impl State {
         let (model_ver, model_ind) = parse_obj();
         let mut parsed_vertices = Vec::new();
         for i in model_ver {
+            let color;
+            if i[1] == 0.0 {
+                color = [0.85967, 0.84732914];
+            } else {
+                color = [0.0048659444, 0.43041354];
+            }
             parsed_vertices.push(Vertex {
                 position: i,
-                tex_coords: [0.0; 2],
+                tex_coords: color,
             })
         }
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -566,6 +658,13 @@ impl State {
     pub fn window(&self) -> &Window {
         &self.window
     }
+    ///
+    ///
+    /// # Arguments
+    ///
+    /// * `new_size`:
+    ///
+    /// returns: ()
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
             self.size = new_size;
@@ -574,9 +673,23 @@ impl State {
             self.surface.configure(&self.device, &self.config);
         }
     }
+    ///
+    ///
+    /// # Arguments
+    ///
+    /// * `event`:
+    ///
+    /// returns: bool
     fn input(&mut self, event: &WindowEvent) -> bool {
         self.camera_controller.process_events(event)
     }
+    ///
+    ///
+    /// # Arguments
+    ///
+    /// * `delta`:
+    ///
+    /// returns: ()
     fn update(&mut self, delta: f32) {
         self.camera_controller
             .update_camera(&mut self.camera, delta);
@@ -586,16 +699,32 @@ impl State {
             0,
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
-        
-        self.obj_vertices = rotate_points(Point3::new(0.0, 0.0, 0.0), &self.obj_vertices, 0.001, 'y');
-        let vertex_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            //            contents: bytemuck::cast_slice(VERTICES),
-            contents: bytemuck::cast_slice(self.obj_vertices.as_slice()),
-            usage: wgpu::BufferUsages::VERTEX,
-        }); 
-        self.vertex_buffer = vertex_buffer;
+        self.obj_vertices = rotate_points(
+            Point3::new(0.0, 0.0, 0.0),
+            &self.obj_vertices,
+            (0.001 * delta),
+            'y',
+        );
+        //let now = Instant::now();
+
+        self.vertex_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Vertex Buffer"),
+                //            contents: bytemuck::cast_slice(VERTICES),
+                contents: bytemuck::cast_slice(self.obj_vertices.as_slice()),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        //self.vertex_buffer = vertex_buffer;
+
+        //let el = now.elapsed();
+        //println!("{:?}", el);*/
     }
+    ///
+    ///
+    /// # Arguments
+    ///
+    /// returns: Result<(), wgpu::SurfaceError>
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         // get_current_texture waits for the surface to provide a new `wgpu::SurfaceTexture` which
         // will be rendered to later.
@@ -660,12 +789,23 @@ impl State {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+/// Describes the layout of a Vertex.
 struct Vertex {
+    /// The position (coordinates) of the vertex.
     position: [f32; 3],
+    /// The texture coordinates of the vertex.
     tex_coords: [f32; 2],
 }
 
 impl Vertex {
+    /// Describes the layout of a Vertex.
+    /// This is used to tell wgpu how to interpret the vertex buffer.
+    ///
+    ///
+    /// # Arguments
+    ///
+    ///
+    /// returns: wgpu::VertexBufferLayout
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
@@ -712,6 +852,7 @@ const VERTICES: &[Vertex] = &[
 
 const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
 
+/// This is the entry point of the program.
 pub async fn run() {
     // Create event loop
     let event_loop = EventLoop::new();
@@ -728,6 +869,7 @@ pub async fn run() {
         'z',
     );
     println!("{:?}", test_rotation);
+    let mut switch = false;
     let mut frame_timer = Instant::now();
     // Initialize event loop
     event_loop.run(move |event, _, control_flow| match event {
@@ -761,7 +903,12 @@ pub async fn run() {
         }
         Event::RedrawRequested(window_id) if window_id == state.window().id() => {
             //            let now = Instant::now();
-            let delta = 144.0 * frame_timer.elapsed().as_secs_f32();
+            let el = frame_timer.elapsed();
+            let delta = 144.0 * el.as_secs_f32();
+            if switch {
+                println!("{:?}fps", (144.0 / delta) as u32);
+            }
+            switch = !switch;
             frame_timer = Instant::now();
             state.update(delta);
             //let elapsed = now.elapsed();
