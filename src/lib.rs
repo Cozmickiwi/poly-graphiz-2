@@ -1,8 +1,13 @@
 mod texture;
 
 use std::{fs::File, io::Read, iter::once, mem, time::Instant};
+use std::f32::consts::PI;
+use std::mem::size_of_val;
 
-use nalgebra::{Matrix3, Matrix4, Perspective3, Point3, Quaternion, RealField, Rotation3, Translation3, Unit, UnitQuaternion, UnitVector3, Vector3};
+use nalgebra::{
+    Matrix3, Matrix4, Perspective3, Point3, Quaternion, RealField, Rotation3, Translation3, Unit,
+    UnitQuaternion, UnitVector3, Vector3,
+};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use wgpu::util::DeviceExt;
 use winit::{
@@ -254,19 +259,22 @@ impl CameraController {
 ///
 /// returns: OPoint<f32, Const<3>>
 
+
+// This is so we can store this in a buffer
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct TransformationMatrix {
-    tmatrix: [[f32; 3]; 3],
+    tmatrix: [[f32; 4]; 4],
     origin_translation: [f32; 3],
     translation_back: [f32; 3],
+    _padding: [f32; 2],
 }
+
+const ID_MAT: [[f32; 4]; 4] = [[0.0; 4]; 4];
 
 impl TransformationMatrix {
     fn new() -> Self {
-        Self {
-            tmatrix: Matrix3::identity.into(),
-            origin_translation: [0.0, 0.0, 0.0],
-            translation_back: [0.0, 0.0, 0.0],
-        }
+        rotate_points_amount(Point3::default(), 0.0, 'y')
     }
 }
 
@@ -347,9 +355,10 @@ fn rotate_points_amount(point: Point3<f32>, rot: f32, ax: char) -> Transformatio
     //let q = UnitQuaternion::from_rotation_matrix(&rotation_matrix);
     let translation_back = Translation3::from(point.coords);
     return (TransformationMatrix {
-        tmatrix: rotation_matrix.into(),
+        tmatrix: rotation_matrix.to_homogeneous().into(),
         origin_translation: origin_translation.into(),
         translation_back: translation_back.into(),
+        _padding: [0.0, 0.0],
     });
     /*
     let r_points = targets
@@ -374,7 +383,6 @@ fn rotate_points_amount(point: Point3<f32>, rot: f32, ax: char) -> Transformatio
     for i in r_points {
         conv.push(i.positon);
     }*/
-
 }
 
 /// Parses the obj file and returns the vertices and indices.
@@ -425,7 +433,9 @@ struct InstanceRaw {
 impl Instance {
     fn to_raw(&self) -> InstanceRaw {
         InstanceRaw {
-            model: ((Translation3::from_vector(self.position).to_homogeneous()) * self.rotation.to_homogeneous()).into(),
+            model: ((Translation3::from_vector(self.position).to_homogeneous())
+                * self.rotation.to_homogeneous())
+            .into(),
         }
     }
 }
@@ -607,6 +617,7 @@ impl State {
         };
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let (model_ver, model_ind) = parse_obj();
+        println!("Vertices: {:?}", model_ver.len());
         let mut parsed_vertices = Vec::new();
         for i in model_ver {
             /*
@@ -623,50 +634,56 @@ impl State {
         }
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
-                        contents: bytemuck::cast_slice(VERTICES),
+            contents: bytemuck::cast_slice(VERTICES),
             //contents: bytemuck::cast_slice(parsed_vertices.as_slice()),
             usage: wgpu::BufferUsages::VERTEX,
         });
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Index Buffer"),
-                        contents: bytemuck::cast_slice(INDICES),
+            contents: bytemuck::cast_slice(INDICES),
             //contents: bytemuck::cast_slice(model_ind.as_slice()),
             usage: wgpu::BufferUsages::INDEX,
         });
         let num_indices = INDICES.len() as u32;
         //let num_indices = model_ind.len() as u32;
         surface.configure(&device, &config);
-        let instances = (0..NUM_INSTANCES_PER_ROW).flat_map(|z| {
-            (0..NUM_INSTANCES_PER_ROW).map(move |x| {
-        //        let pos = UnitVector3::new(x as f32, 0.0, z as f32) - INSTANCE_DISPLACEMENT;
-                let pos = Vector3::new(x as f32, 0.0, z as f32) - INSTANCE_DISPLACEMENT;
-                let rot = if pos.norm_squared() == 0.0 {
-                    UnitQuaternion::from_axis_angle(&Vector3::z_axis(), 0.0_f32.to_radians())
-                } else {
-                    UnitQuaternion::from_axis_angle(&Unit::new_normalize(pos), 45.0_f32.to_radians())
-                };
-                Instance {
-                    position: pos,
-                    rotation: rot,
-                }
+        let instances = (0..NUM_INSTANCES_PER_ROW)
+            .flat_map(|z| {
+                (0..NUM_INSTANCES_PER_ROW).map(move |x| {
+                    //        let pos = UnitVector3::new(x as f32, 0.0, z as f32) - INSTANCE_DISPLACEMENT;
+                    let pos = Vector3::new(x as f32, 0.0, z as f32) - INSTANCE_DISPLACEMENT;
+                    let rot = if pos.norm_squared() == 0.0 {
+                        UnitQuaternion::from_axis_angle(&Vector3::z_axis(), 0.0_f32.to_radians())
+                    } else {
+                        UnitQuaternion::from_axis_angle(
+                            &Unit::new_normalize(pos),
+                            45.0_f32.to_radians(),
+                        )
+                    };
+                    Instance {
+                        position: pos,
+                        rotation: rot,
+                    }
+                })
             })
-        }).collect::<Vec<_>>();
+            .collect::<Vec<_>>();
         let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Instance Buffer"),
-                contents: bytemuck::cast_slice(&instance_data),
-                usage: wgpu::BufferUsages::VERTEX,
-            }
-        );
-        //let transform_uniform = TransformationMatrix::new();
+            label: Some("Instance Buffer"),
+            contents: bytemuck::cast_slice(&instance_data),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let transform_uniform = TransformationMatrix::new();
         let transform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Transform Buffer"),
+            /*
             contents: bytemuck::cast_slice(&rotate_points_amount(
                 Point3::new(0.0, 0.0, 0.0),
             0.5,
             'z',
-            )),
-            usage: wgpu::BufferUsages::COPY_DST,
+            )),*/
+            contents: bytemuck::cast_slice(&[transform_uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let transform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -682,6 +699,7 @@ impl State {
                     count: None,
                 }],
             });
+        println!("{:?}", size_of_val(&transform_uniform));
         let transform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("transform_bind_group"),
             layout: &transform_bind_group_layout,
@@ -775,7 +793,11 @@ impl State {
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&texture_bind_group_layout, &camera_bind_group_layout, &transform_bind_group_layout],
+                bind_group_layouts: &[
+                    &texture_bind_group_layout,
+                    &camera_bind_group_layout,
+                    &transform_bind_group_layout,
+                ],
                 push_constant_ranges: &[],
             });
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -876,7 +898,7 @@ impl State {
     /// * `delta`:
     ///
     /// returns: ()
-    fn update(&mut self, delta: f32) {
+    fn update(&mut self, delta: f32, rot: f32) {
         self.camera_controller
             .update_camera(&mut self.camera, delta);
         self.camera_uniform.update_projection(&self.camera);
@@ -884,23 +906,29 @@ impl State {
             &self.camera_buffer,
             0,
             bytemuck::cast_slice(&[self.camera_uniform]),
-        );/*
-        self.obj_vertices = rotate_points(
-            Point3::new(0.0, 0.0, 0.0),
-            &self.obj_vertices,
-            0.001 * delta,
-            'y',
         );
-        //let now = Instant::now();
+        self.queue.write_buffer(
+            &self.transform_buffer,
+            0,
+            bytemuck::cast_slice(&[rotate_points_amount(Point3::default(), rot, 'y')]),
+        );
+        /*
+           self.obj_vertices = rotate_points(
+               Point3::new(0.0, 0.0, 0.0),
+               &self.obj_vertices,
+               0.001 * delta,
+               'y',
+           );
+           //let now = Instant::now();
 
-        self.vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Vertex Buffer"),
-                //            contents: bytemuck::cast_slice(VERTICES),
-                contents: bytemuck::cast_slice(self.obj_vertices.as_slice()),
-                usage: wgpu::BufferUsages::VERTEX,
-            });*/
+           self.vertex_buffer = self
+               .device
+               .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                   label: Some("Vertex Buffer"),
+                   //            contents: bytemuck::cast_slice(VERTICES),
+                   contents: bytemuck::cast_slice(self.obj_vertices.as_slice()),
+                   usage: wgpu::BufferUsages::VERTEX,
+               });*/
         //self.vertex_buffer = vertex_buffer;
 
         //let el = now.elapsed();
@@ -964,7 +992,6 @@ impl State {
         render_pass.set_bind_group(2, &self.transform_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-        render_pass.set_vertex_buffer(2, self.transform_buffer.slice(..));
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
         drop(render_pass);
@@ -1060,6 +1087,7 @@ pub async fn run() {
     println!("{:?}", test_rotation);
     let mut switch = false;
     let mut frame_timer = Instant::now();
+    let mut rot = 0.0;
     // Initialize event loop
     event_loop.run(move |event, _, control_flow| match event {
         // Check if os has sent an event to the window
@@ -1099,7 +1127,11 @@ pub async fn run() {
             }
             switch = !switch;
             frame_timer = Instant::now();
-            state.update(delta);
+            rot += 0.001;
+            if rot >= PI * 2.0 {
+                rot = 0.0;
+            }
+            state.update(delta, rot);
             //let elapsed = now.elapsed();
             //let now = Instant::now();
             match state.render() {

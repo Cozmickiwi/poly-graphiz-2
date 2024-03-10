@@ -38,7 +38,6 @@ struct VertexOutput {
 fn vs_main(
     model: VertexInput,
     instance: InstanceInput,
-    transform: vec3<f32>,
 ) -> VertexOutput {
     let model_matrix = mat4x4<f32>(
         instance.model_matrix_0,
@@ -47,8 +46,9 @@ fn vs_main(
         instance.model_matrix_3,
     );
     var out: VertexOutput;
+    let rotp = transfmatrix.tmatrix * vec4<f32>(model.position, 1.0);
     out.tex_coords = model.tex_coords;
-    out.clip_position = camera.view_proj * model_matrix * vec4<f32>(model.position, 1.0);
+    out.clip_position = camera.view_proj * model_matrix * rotp;
     return out;
 }
 
