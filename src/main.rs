@@ -5,7 +5,7 @@ extern crate log;
 
 fn main() {
     // Enable error logging
-    env_logger::init();
+    //env_logger::init();
     // Initialize graphics
     pollster::block_on(run());
 }

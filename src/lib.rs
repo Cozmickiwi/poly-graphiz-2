@@ -1,9 +1,16 @@
+mod model;
+mod resources;
 mod texture;
 
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
+use model::Vertex;
 use std::f32::consts::PI;
 use std::mem::size_of_val;
 use std::{fs::File, io::Read, iter::once, mem, time::Instant};
 
+use crate::model::DrawModel;
 use nalgebra::{
     Matrix3, Matrix4, Perspective3, Point3, Quaternion, RealField, Rotation3, Translation3, Unit,
     UnitQuaternion, UnitVector3, Vector3,
@@ -306,6 +313,7 @@ pub fn rotate_point(point: Point3<f32>, target: Point3<f32>, rot: f32, ax: char)
 /// * `ax`:
 ///
 /// returns: Vec<Vertex, Global>
+/*
 fn rotate_points(point: Point3<f32>, targets: &Vec<Vertex>, rot: f32, ax: char) -> Vec<Vertex> {
     let axis;
     match ax {
@@ -339,7 +347,7 @@ fn rotate_points(point: Point3<f32>, targets: &Vec<Vertex>, rot: f32, ax: char) 
     //println!("{:?}", el);
     r_points
 }
-
+*/
 fn rotate_points_amount(point: Point3<f32>, rot: f32, ax: char) -> TransformationMatrix {
     let axis;
     match ax {
@@ -518,11 +526,11 @@ struct State {
     /// The vertex buffer is a handle to a buffer which stores vertex data.
     /// Vertex data is used to describe the shape of a 3D object by defining points (vertices).
     /// The index buffer stores the conncections between vertices.
-    vertex_buffer: wgpu::Buffer,
+    //vertex_buffer: wgpu::Buffer,
     /// The index buffer is a handle to a buffer which stores index data.
     /// Index data is used to describe the connections between vertices.
-    index_buffer: wgpu::Buffer,
-    num_indices: u32,
+    //index_buffer: wgpu::Buffer,
+    //num_indices: u32,
     /// The diffuse bind group is a handle to a bind group which stores the diffuse texture.
     /// A bind group is a collection of resources which are bound to the pipeline. These resources
     /// are used in the shaders.
@@ -541,11 +549,13 @@ struct State {
     /// The camera bind group is a handle to a bind group which stores the camera buffer.
     camera_bind_group: wgpu::BindGroup,
     camera_controller: CameraController,
-    obj_vertices: Vec<Vertex>,
+    //    obj_vertices: Vec<Vertex>,
     instances: Vec<Instance>,
     instance_buffer: wgpu::Buffer,
     transform_buffer: wgpu::Buffer,
     transform_bind_group: wgpu::BindGroup,
+    depth_texture: texture::Texture,
+    obj_model: model::Model,
 }
 
 impl State {
@@ -582,7 +592,8 @@ impl State {
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    features: wgpu::Features::POLYGON_MODE_LINE | wgpu::Features::CONSERVATIVE_RASTERIZATION,
+                    features: wgpu::Features::POLYGON_MODE_LINE
+                        | wgpu::Features::CONSERVATIVE_RASTERIZATION,
                     // WebGL doesn't support all of wgpu's features, so if
                     // we're building for the web, we'll have to disable some.
                     limits: if cfg!(target_arch = "wasm32") {
@@ -616,10 +627,13 @@ impl State {
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: Vec::new(),
         };
+        let depth_texture =
+            texture::Texture::create_depth_texture(&device, &config, "depth_texture");
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
-        let (model_ver, model_ind) = parse_obj("models/dragon4.obj");
-        println!("Vertices: {:?}", model_ver.len());
-       // panic!();
+        //let (model_ver, model_ind) = parse_obj("models/dragon4.obj");
+        //println!("Vertices: {:?}", model_ver.len());
+        // panic!();
+        /*
         let mut parsed_vertices = Vec::new();
         for i in model_ver {
             /*
@@ -633,27 +647,17 @@ impl State {
                 position: i,
                 tex_coords: [0.0048659444, 0.43041354],
             })
-        }
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            //contents: bytemuck::cast_slice(VERTICES),
-            contents: bytemuck::cast_slice(parsed_vertices.as_slice()),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
-            //contents: bytemuck::cast_slice(INDICES),
-            contents: bytemuck::cast_slice(model_ind.as_slice()),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-        //let num_indices = INDICES.len() as u32;
-        let num_indices = model_ind.len() as u32;
+        }*/
         surface.configure(&device, &config);
         let instances = (0..NUM_INSTANCES_PER_ROW)
             .flat_map(|z| {
                 (0..NUM_INSTANCES_PER_ROW).map(move |x| {
                     //        let pos = UnitVector3::new(x as f32, 0.0, z as f32) - INSTANCE_DISPLACEMENT;
-                    let pos = Vector3::new(x as f32 * INSTANCE_SPACING, 0.0, z as f32 * INSTANCE_SPACING) - INSTANCE_DISPLACEMENT;
+                    let pos = Vector3::new(
+                        x as f32 * INSTANCE_SPACING,
+                        0.0,
+                        z as f32 * INSTANCE_SPACING,
+                    ) - INSTANCE_DISPLACEMENT;
                     let rot = if pos.norm_squared() == 0.0 {
                         UnitQuaternion::from_axis_angle(&Vector3::z_axis(), 0.0)
                     } else {
@@ -750,6 +754,10 @@ impl State {
                 },
             ],
         });
+        let obj_model =
+            resources::load_model("../res/dragon5.obj", &device, &queue, &texture_bind_group_layout)
+                .await
+                .unwrap();
         let camera = Camera {
             // positon the camera 1 unit up and 2 units back
             // +z is out of the screen
@@ -808,7 +816,7 @@ impl State {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",
-                buffers: &[Vertex::desc(), InstanceRaw::desc()],
+                buffers: &[model::ModelVertex::desc(), InstanceRaw::desc()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -832,7 +840,13 @@ impl State {
                 // Requires Features::CONSERVATIVE_RASTERIZATION
                 conservative: false,
             },
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: texture::Texture::DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState {
                 count: 1,
                 mask: !0,
@@ -849,9 +863,9 @@ impl State {
             config,
             size,
             render_pipeline,
-            vertex_buffer,
-            index_buffer,
-            num_indices,
+            //vertex_buffer,
+            //index_buffer,
+            //num_indices,
             diffuse_bind_group,
             diffuse_texture,
             camera,
@@ -859,11 +873,13 @@ impl State {
             camera_buffer,
             camera_bind_group,
             camera_controller,
-            obj_vertices: parsed_vertices,
+            //obj_vertices: parsed_vertices,
             instances,
             instance_buffer,
             transform_buffer,
             transform_bind_group,
+            depth_texture,
+            obj_model,
         }
     }
     pub fn window(&self) -> &Window {
@@ -882,6 +898,8 @@ impl State {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
+            self.depth_texture =
+                texture::Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
         }
     }
     ///
@@ -992,7 +1010,14 @@ impl State {
                     store: wgpu::StoreOp::Store,
                 },
             })],
-            depth_stencil_attachment: None,
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.depth_texture.view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
             timestamp_writes: None,
             occlusion_query_set: None,
         });
@@ -1001,10 +1026,12 @@ impl State {
         render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
         render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
         render_pass.set_bind_group(2, &self.transform_bind_group, &[]);
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        //        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
+        //        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        //        render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
+        use model::DrawModel;
+        render_pass.draw_mesh_instanced(&self.obj_model.meshes[0], 0..self.instances.len() as u32);
         drop(render_pass);
         // Tell wgpu to finish the command buffer and submit it to the GPU's render queue.
         // Submit will accept anything that implements IntoIter.
@@ -1016,45 +1043,7 @@ impl State {
     }
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-/// Describes the layout of a Vertex.
-struct Vertex {
-    /// The position (coordinates) of the vertex.
-    position: [f32; 3],
-    /// The texture coordinates of the vertex.
-    tex_coords: [f32; 2],
-}
-
-impl Vertex {
-    /// Describes the layout of a Vertex.
-    /// This is used to tell wgpu how to interpret the vertex buffer.
-    ///
-    ///
-    /// # Arguments
-    ///
-    ///
-    /// returns: wgpu::VertexBufferLayout
-    fn desc() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x2,
-                },
-            ],
-        }
-    }
-}
-
+/*
 const VERTICES: &[Vertex] = &[
     // Changed
     Vertex {
@@ -1077,12 +1066,24 @@ const VERTICES: &[Vertex] = &[
         position: [0.44147372, 0.2347359, 0.0],
         tex_coords: [0.9414737, 0.2652641],
     }, // E
-];
+];*/
 
 const INDICES: &[u32] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
 
 /// This is the entry point of the program.
+#[macro_use]
+extern crate log;
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub async fn run() {
+    cfg_if::cfg_if! {
+    if #[cfg(target_arch = "wasm32")] {
+        std::panic::set_hook(Box::new(console_error_panic_hook::hook));
+        console_log::init_with_level(log::Level::Warn).expect("Couldn't initialize logger");
+    } else {
+        env_logger::init();
+    }
+    }
     // Create event loop
     let event_loop = EventLoop::new();
     // Create and initialize the window
@@ -1090,6 +1091,25 @@ pub async fn run() {
         .with_maximized(true)
         .build(&event_loop)
         .unwrap();
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Winit prevents sizing with CSS, so we have to set
+        // the size manually when on web.
+        use winit::dpi::PhysicalSize;
+        window.set_inner_size(PhysicalSize::new(450, 400));
+
+        use winit::platform::web::WindowExtWebSys;
+        web_sys::window()
+            .and_then(|win| win.document())
+            .and_then(|doc| {
+                let dst = doc.get_element_by_id("wasm-example")?;
+                let canvas = web_sys::Element::from(window.canvas());
+                dst.append_child(&canvas).ok()?;
+                Some(())
+            })
+            .expect("Couldn't append canvas to document body.");
+    }
+
     let mut state = State::new(window).await;
     let test_rotation = rotate_point(
         state.camera.eye,
@@ -1157,8 +1177,8 @@ pub async fn run() {
                 // All other errors (Outdated, Timeout) should be resolved by the next frame
                 Err(e) => eprintln!("{:?}", e),
             }
-                        //println!("update: {:?}", elapsed);
-                        //println!("render: {:?}", now.elapsed());
+            //println!("update: {:?}", elapsed);
+            //println!("render: {:?}", now.elapsed());
         }
         Event::MainEventsCleared => {
             // RedrawRequested will only trigger once unless we manually request it.
