@@ -9,6 +9,7 @@ use model::Vertex;
 use std::f32::consts::PI;
 use std::mem::size_of_val;
 use std::{fs::File, io::Read, iter::once, mem, time::Instant};
+use std::env::{current_dir, set_current_dir};
 
 use crate::model::DrawModel;
 use nalgebra::{
@@ -754,8 +755,9 @@ impl State {
                 },
             ],
         });
+        //println!("{:?}", set_current_dir("models/"));
         let obj_model =
-            resources::load_model("../res/dragon5.obj", &device, &queue, &texture_bind_group_layout)
+            resources::load_model("cube.obj", &device, &queue, &texture_bind_group_layout)
                 .await
                 .unwrap();
         let camera = Camera {

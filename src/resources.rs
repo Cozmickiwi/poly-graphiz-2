@@ -1,4 +1,6 @@
-use std::io::{BufReader, Cursor};
+use std::env::{current_exe, set_current_dir};
+use std::fs::{File, read_dir};
+use std::io::{BufReader, Cursor, Read};
 
 use cfg_if::cfg_if;
 use wgpu::util::DeviceExt;
@@ -30,7 +32,7 @@ pub async fn load_string(file_name: &str) -> anyhow::Result<String> {
             let path = std::path::Path::new(env!("OUT_DIR"))
                 .join("res")
                 .join(file_name);
-            let txt = std::fs::read_to_string(path)?;
+            let txt = std::fs::read_to_string("models/dragon5.obj")?;
         }
     }
 
@@ -50,11 +52,17 @@ pub async fn load_binary(file_name: &str) -> anyhow::Result<Vec<u8>> {
             let path = std::path::Path::new(env!("OUT_DIR"))
                 .join("res")
                 .join(file_name);
-            let data = std::fs::read(path)?;
+//            let data = std::fs::read(path)?;
+            let data = std::fs::read("models/dragon5.obj")?;
         }
     }
+
     Ok(data)
 }
+
+ 
+
+ 
 
 pub async fn load_texture(
     file_name: &str,
@@ -71,7 +79,14 @@ pub async fn load_model(
     queue: &Queue,
     layout: &wgpu::BindGroupLayout,
 ) -> anyhow::Result<model::Model> {
+    /*
+    for i in read_dir("target/release").unwrap() {
+        println!("{:?}", i);
+    }*/
     let obj_text = load_string(file_name).await?;
+    //let mut file = File::open("dragon5.obj").expect("E1");
+//    let mut obj_text = String::new();
+//    file.read_to_string(&mut obj_text);
     let obj_cursor = Cursor::new(obj_text);
     let mut obj_reader = BufReader::new(obj_cursor);
     let (models, obj_materials) = tobj::load_obj_buf_async(
@@ -82,7 +97,7 @@ pub async fn load_model(
             ..Default::default()
         },
         |p| async move {
-            let mat_text = load_string(&p).await.unwrap();
+            let mat_text = load_string(&p).await.expect("E2");
             tobj::load_mtl_buf(&mut BufReader::new(Cursor::new(mat_text)))
         },
     )
@@ -90,7 +105,8 @@ pub async fn load_model(
 
     let mut materials = Vec::new();
     for m in obj_materials? {
-        let diffuse_texture = load_texture(&m.diffuse_texture, &device, &queue).await?;
+        println!("{:?}", &m);
+        let diffuse_texture = load_texture(&m.diffuse_texture, device, queue).await.expect("E3");
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout,
             entries: &[
