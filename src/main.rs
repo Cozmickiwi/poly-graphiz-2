@@ -1,6 +1,5 @@
 use wgpu_tutorial1::run;
 
-#[macro_use]
 extern crate log;
 
 fn main() {

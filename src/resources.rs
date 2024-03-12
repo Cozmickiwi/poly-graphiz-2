@@ -52,7 +52,6 @@ pub async fn load_binary(file_name: &str) -> anyhow::Result<Vec<u8>> {
             let data = std::fs::read(path)?;
         }
     }
-
     Ok(data)
 }
 
@@ -74,7 +73,6 @@ pub async fn load_model(
     let obj_text = load_string(file_name).await?;
     let obj_cursor = Cursor::new(obj_text);
     let mut obj_reader = BufReader::new(obj_cursor);
-
     let (models, obj_materials) = tobj::load_obj_buf_async(
         &mut obj_reader,
         &tobj::LoadOptions {
@@ -88,7 +86,6 @@ pub async fn load_model(
         },
     )
     .await?;
-
     let mut materials = Vec::new();
     for m in obj_materials? {
         let diffuse_texture = load_texture(&m.diffuse_texture.unwrap(), device, queue).await?;
@@ -106,15 +103,12 @@ pub async fn load_model(
             ],
             label: None,
         });
-
         materials.push(model::Material {
             name: m.name,
             diffuse_texture,
             bind_group,
         })
     }
-    println!("{}", materials.len());
-
     let meshes = models
         .into_iter()
         .map(|m| {
@@ -133,7 +127,6 @@ pub async fn load_model(
                     ],
                 })
                 .collect::<Vec<_>>();
-
             let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("{:?} Vertex Buffer", file_name)),
                 contents: bytemuck::cast_slice(&vertices),
@@ -144,7 +137,6 @@ pub async fn load_model(
                 contents: bytemuck::cast_slice(&m.mesh.indices),
                 usage: wgpu::BufferUsages::INDEX,
             });
-
             model::Mesh {
                 name: file_name.to_string(),
                 vertex_buffer,
@@ -154,7 +146,5 @@ pub async fn load_model(
             }
         })
         .collect::<Vec<_>>();
-    println!("{}", meshes.len());
-    //    panic!();
     Ok(model::Model { meshes, materials })
 }

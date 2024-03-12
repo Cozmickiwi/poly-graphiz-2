@@ -6,17 +6,13 @@ mod texture;
 use wasm_bindgen::prelude::*;
 
 use model::Vertex;
-use std::env::{current_dir, set_current_dir};
 use std::f32::consts::PI;
 use std::mem::size_of_val;
 use std::{fs::File, io::Read, iter::once, mem, time::Instant};
 
-use crate::model::DrawModel;
 use nalgebra::{
-    Matrix3, Matrix4, Perspective3, Point3, Quaternion, RealField, Rotation3, Translation3, Unit,
-    UnitQuaternion, UnitVector3, Vector3,
+    Matrix4, Perspective3, Point3, Rotation3, Translation3, Unit, UnitQuaternion, Vector3,
 };
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use wgpu::util::DeviceExt;
 use winit::{
     event::*,
@@ -277,8 +273,6 @@ struct TransformationMatrix {
     _padding: [f32; 2],
 }
 
-const ID_MAT: [[f32; 4]; 4] = [[0.0; 4]; 4];
-
 impl TransformationMatrix {
     fn new() -> Self {
         rotate_points_amount(Point3::default(), 0.0, 'y')
@@ -286,13 +280,12 @@ impl TransformationMatrix {
 }
 
 pub fn rotate_point(point: Point3<f32>, target: Point3<f32>, rot: f32, ax: char) -> Point3<f32> {
-    let axis;
-    match ax {
-        'x' => axis = Vector3::x_axis(),
-        'y' => axis = Vector3::y_axis(),
-        'z' => axis = Vector3::z_axis(),
+    let axis = match ax {
+        'x' => Vector3::x_axis(),
+        'y' => Vector3::y_axis(),
+        'z' => Vector3::z_axis(),
         _ => panic!(),
-    }
+    };
     let origin_translation = Translation3::from(-point.coords);
     let rotation_matrix = Rotation3::from_axis_angle(&axis, -rot);
     let translated_point = origin_translation * target;
@@ -350,24 +343,23 @@ fn rotate_points(point: Point3<f32>, targets: &Vec<Vertex>, rot: f32, ax: char) 
 }
 */
 fn rotate_points_amount(point: Point3<f32>, rot: f32, ax: char) -> TransformationMatrix {
-    let axis;
-    match ax {
-        'x' => axis = Vector3::x_axis(),
-        'y' => axis = Vector3::y_axis(),
-        'z' => axis = Vector3::z_axis(),
+    let axis = match ax {
+        'x' => Vector3::x_axis(),
+        'y' => Vector3::y_axis(),
+        'z' => Vector3::z_axis(),
         _ => panic!(),
-    }
+    };
     let origin_translation = Translation3::from(-point.coords);
     //let now = Instant::now();
     let rotation_matrix = Rotation3::from_axis_angle(&axis, -rot);
     //let q = UnitQuaternion::from_rotation_matrix(&rotation_matrix);
     let translation_back = Translation3::from(point.coords);
-    return (TransformationMatrix {
+    TransformationMatrix {
         tmatrix: rotation_matrix.to_homogeneous().into(),
         origin_translation: origin_translation.into(),
         translation_back: translation_back.into(),
         _padding: [0.0, 0.0],
-    });
+    }
     /*
     let r_points = targets
         .par_iter()
@@ -441,7 +433,7 @@ struct InstanceRaw {
 impl Instance {
     fn to_raw(&self) -> InstanceRaw {
         InstanceRaw {
-            model: ((Translation3::from_vector(self.position).to_homogeneous())
+            model: ((Translation3::from(self.position).to_homogeneous())
                 * self.rotation.to_homogeneous())
             .into(),
         }
@@ -527,18 +519,15 @@ struct State {
     /// The vertex buffer is a handle to a buffer which stores vertex data.
     /// Vertex data is used to describe the shape of a 3D object by defining points (vertices).
     /// The index buffer stores the conncections between vertices.
-    //vertex_buffer: wgpu::Buffer,
     /// The index buffer is a handle to a buffer which stores index data.
     /// Index data is used to describe the connections between vertices.
-    //index_buffer: wgpu::Buffer,
-    //num_indices: u32,
     /// The diffuse bind group is a handle to a bind group which stores the diffuse texture.
     /// A bind group is a collection of resources which are bound to the pipeline. These resources
     /// are used in the shaders.
     diffuse_bind_group: wgpu::BindGroup,
     /// The diffuse texture is a handle to a texture which stores the color data of the diffuse
     /// texture.
-    diffuse_texture: texture::Texture,
+    //diffuse_texture: texture::Texture,
     /// The camera is the point of view from which the scene is rendered.
     camera: Camera,
     /// The camera uniform is a struct which stores the camera's view and projection.
@@ -550,7 +539,6 @@ struct State {
     /// The camera bind group is a handle to a bind group which stores the camera buffer.
     camera_bind_group: wgpu::BindGroup,
     camera_controller: CameraController,
-    //    obj_vertices: Vec<Vertex>,
     instances: Vec<Instance>,
     instance_buffer: wgpu::Buffer,
     transform_buffer: wgpu::Buffer,
@@ -631,29 +619,10 @@ impl State {
         let depth_texture =
             texture::Texture::create_depth_texture(&device, &config, "depth_texture");
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
-        //let (model_ver, model_ind) = parse_obj("models/dragon4.obj");
-        //println!("Vertices: {:?}", model_ver.len());
-        // panic!();
-        /*
-        let mut parsed_vertices = Vec::new();
-        for i in model_ver {
-            /*
-            let color;
-            if i[1] == 0.0 {
-                color = [0.85967, 0.84732914];
-            } else {
-                color = [0.0048659444, 0.43041354];
-            }*/
-            parsed_vertices.push(Vertex {
-                position: i,
-                tex_coords: [0.0048659444, 0.43041354],
-            })
-        }*/
         surface.configure(&device, &config);
         let instances = (0..NUM_INSTANCES_PER_ROW)
             .flat_map(|z| {
                 (0..NUM_INSTANCES_PER_ROW).map(move |x| {
-                    //        let pos = UnitVector3::new(x as f32, 0.0, z as f32) - INSTANCE_DISPLACEMENT;
                     let pos = Vector3::new(
                         x as f32 * INSTANCE_SPACING,
                         0.0,
@@ -683,12 +652,6 @@ impl State {
         let transform_uniform = TransformationMatrix::new();
         let transform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Transform Buffer"),
-            /*
-            contents: bytemuck::cast_slice(&rotate_points_amount(
-                Point3::new(0.0, 0.0, 0.0),
-            0.5,
-            'z',
-            )),*/
             contents: bytemuck::cast_slice(&[transform_uniform]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -755,7 +718,6 @@ impl State {
                 },
             ],
         });
-        //println!("{:?}", set_current_dir("models/"));
         let obj_model =
             resources::load_model("dragon6.obj", &device, &queue, &texture_bind_group_layout)
                 .await
@@ -865,17 +827,13 @@ impl State {
             config,
             size,
             render_pipeline,
-            //vertex_buffer,
-            //index_buffer,
-            //num_indices,
             diffuse_bind_group,
-            diffuse_texture,
+            //            diffuse_texture,
             camera,
             camera_uniform,
             camera_buffer,
             camera_bind_group,
             camera_controller,
-            //obj_vertices: parsed_vertices,
             instances,
             instance_buffer,
             transform_buffer,
@@ -930,33 +888,11 @@ impl State {
             0,
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
-        //let rot1 = rotate_point(Point3::default(), Point3::default(), rot, 'z');
         self.queue.write_buffer(
             &self.transform_buffer,
             0,
             bytemuck::cast_slice(&[rotate_points_amount(Point3::default(), rot, 'y')]),
         );
-        /*
-        self.obj_vertices = rotate_points(
-            Point3::new(0.0, 0.0, 0.0),
-            &self.obj_vertices,
-            0.001 * delta,
-            'y',
-        );
-        //let now = Instant::now();
-
-        self.vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Vertex Buffer"),
-                //            contents: bytemuck::cast_slice(VERTICES),
-                contents: bytemuck::cast_slice(self.obj_vertices.as_slice()),
-                usage: wgpu::BufferUsages::VERTEX,
-            });*/
-        //self.vertex_buffer = vertex_buffer;
-
-        //let el = now.elapsed();
-        //println!("{:?}", el);*/
     }
     ///
     ///
@@ -965,9 +901,7 @@ impl State {
     /// returns: Result<(), wgpu::SurfaceError>
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         // get_current_texture waits for the surface to provide a new `wgpu::SurfaceTexture` which
-
         // will be rendered to later.
-
         let now = Instant::now();
         let output = self.surface.get_current_texture()?;
         // Create a `wgpu::Textureview` with default settings.
@@ -978,7 +912,6 @@ impl State {
         // Create a command encoder.
         // The command encoder creates the commands to send to the GPU. The commands are sent as a
         // command buffer.
-
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -986,7 +919,6 @@ impl State {
             });
         // Use the encoder to create a `wgpu::RenderPass`.
         // The `wgpu::RenderPass` has all the methods for the actual drawing.
-
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Render Pass"),
             // Describe where to draw the color to.
@@ -1000,10 +932,6 @@ impl State {
                 ops: wgpu::Operations {
                     // Clear screen
                     load: wgpu::LoadOp::Clear(wgpu::Color {
-                        /*r: 0.1,
-                        g: 0.2,
-                        b: 0.3,
-                        a: 1.0,*/
                         r: 0.0,
                         g: 0.0,
                         b: 0.0,
@@ -1028,16 +956,11 @@ impl State {
         render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
         render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
         render_pass.set_bind_group(2, &self.transform_bind_group, &[]);
-        //        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-        //        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        //        render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
-
         for i in 0..self.obj_model.meshes.len() {
             let mesh = &self.obj_model.meshes[i];
             let material = &self.obj_model.materials[mesh.material];
             use model::DrawModel;
-
             render_pass.draw_mesh_instanced(
                 mesh,
                 material,
@@ -1048,40 +971,11 @@ impl State {
         drop(render_pass);
         // Tell wgpu to finish the command buffer and submit it to the GPU's render queue.
         // Submit will accept anything that implements IntoIter.
-
         self.queue.submit(once(encoder.finish()));
         output.present();
-
         Ok(())
     }
 }
-
-/*
-const VERTICES: &[Vertex] = &[
-    // Changed
-    Vertex {
-        position: [-0.0868241, 0.49240386, 0.0],
-        tex_coords: [0.4131759, 0.00759614],
-    }, // A
-    Vertex {
-        position: [-0.49513406, 0.06958647, 0.0],
-        tex_coords: [0.0048659444, 0.43041354],
-    }, // B
-    Vertex {
-        position: [-0.21918549, -0.44939706, 0.0],
-        tex_coords: [0.28081453, 0.949397],
-    }, // C
-    Vertex {
-        position: [0.35966998, -0.3473291, 0.0],
-        tex_coords: [0.85967, 0.84732914],
-    }, // D
-    Vertex {
-        position: [0.44147372, 0.2347359, 0.0],
-        tex_coords: [0.9414737, 0.2652641],
-    }, // E
-];*/
-
-const INDICES: &[u32] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
 
 /// This is the entry point of the program.
 #[macro_use]
@@ -1165,7 +1059,6 @@ pub async fn run() {
             }
         }
         Event::RedrawRequested(window_id) if window_id == state.window().id() => {
-            //            let now = Instant::now();
             let el = frame_timer.elapsed();
             let delta = 144.0 * el.as_secs_f32();
             if switch {
@@ -1177,10 +1070,7 @@ pub async fn run() {
             if rot >= PI * 2.0 {
                 rot = 0.0;
             }
-
             state.update(delta, rot);
-            //let elapsed = now.elapsed();
-            //let now = Instant::now();
             match state.render() {
                 Ok(_) => {}
                 // Reconfigure the surface if lost
@@ -1190,8 +1080,6 @@ pub async fn run() {
                 // All other errors (Outdated, Timeout) should be resolved by the next frame
                 Err(e) => eprintln!("{:?}", e),
             }
-            //println!("update: {:?}", elapsed);
-            //println!("render: {:?}", now.elapsed());
         }
         Event::MainEventsCleared => {
             // RedrawRequested will only trigger once unless we manually request it.
