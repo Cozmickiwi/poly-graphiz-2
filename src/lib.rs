@@ -6,10 +6,10 @@ mod texture;
 use wasm_bindgen::prelude::*;
 
 use model::Vertex;
+use std::env::{current_dir, set_current_dir};
 use std::f32::consts::PI;
 use std::mem::size_of_val;
 use std::{fs::File, io::Read, iter::once, mem, time::Instant};
-use std::env::{current_dir, set_current_dir};
 
 use crate::model::DrawModel;
 use nalgebra::{
@@ -757,7 +757,7 @@ impl State {
         });
         //println!("{:?}", set_current_dir("models/"));
         let obj_model =
-            resources::load_model("cube.obj", &device, &queue, &texture_bind_group_layout)
+            resources::load_model("girl3.obj", &device, &queue, &texture_bind_group_layout)
                 .await
                 .unwrap();
         let camera = Camera {
@@ -1032,8 +1032,15 @@ impl State {
         render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         //        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         //        render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
+        let mesh = &self.obj_model.meshes[0];
+        let material = &self.obj_model.materials[mesh.material];
         use model::DrawModel;
-        render_pass.draw_mesh_instanced(&self.obj_model.meshes[0], 0..self.instances.len() as u32);
+        render_pass.draw_mesh_instanced(
+            mesh,
+            material,
+            0..self.instances.len() as u32,
+            &self.camera_bind_group,
+        );
         drop(render_pass);
         // Tell wgpu to finish the command buffer and submit it to the GPU's render queue.
         // Submit will accept anything that implements IntoIter.
