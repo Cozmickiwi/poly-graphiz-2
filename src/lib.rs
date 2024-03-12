@@ -757,7 +757,7 @@ impl State {
         });
         //println!("{:?}", set_current_dir("models/"));
         let obj_model =
-            resources::load_model("girl3.obj", &device, &queue, &texture_bind_group_layout)
+            resources::load_model("dragon6.obj", &device, &queue, &texture_bind_group_layout)
                 .await
                 .unwrap();
         let camera = Camera {
@@ -838,7 +838,7 @@ impl State {
                 // Requires Features::DEPTH_CLIP_CONTROL
                 unclipped_depth: false,
                 // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
-                polygon_mode: wgpu::PolygonMode::Line,
+                polygon_mode: wgpu::PolygonMode::Fill,
                 // Requires Features::CONSERVATIVE_RASTERIZATION
                 conservative: false,
             },
@@ -1032,15 +1032,19 @@ impl State {
         render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         //        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         //        render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
-        let mesh = &self.obj_model.meshes[0];
-        let material = &self.obj_model.materials[mesh.material];
-        use model::DrawModel;
-        render_pass.draw_mesh_instanced(
-            mesh,
-            material,
-            0..self.instances.len() as u32,
-            &self.camera_bind_group,
-        );
+
+        for i in 0..self.obj_model.meshes.len() {
+            let mesh = &self.obj_model.meshes[i];
+            let material = &self.obj_model.materials[mesh.material];
+            use model::DrawModel;
+
+            render_pass.draw_mesh_instanced(
+                mesh,
+                material,
+                0..self.instances.len() as u32,
+                &self.camera_bind_group,
+            );
+        }
         drop(render_pass);
         // Tell wgpu to finish the command buffer and submit it to the GPU's render queue.
         // Submit will accept anything that implements IntoIter.

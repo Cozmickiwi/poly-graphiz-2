@@ -1,10 +1,7 @@
-use std::env::{current_exe, set_current_dir};
-use std::fs::{read_dir, File};
-use std::io::{BufReader, Cursor, Read};
+use std::io::{BufReader, Cursor};
 
 use cfg_if::cfg_if;
 use wgpu::util::DeviceExt;
-use wgpu::{Device, Queue};
 
 use crate::{model, texture};
 
@@ -29,11 +26,10 @@ pub async fn load_string(file_name: &str) -> anyhow::Result<String> {
                 .text()
                 .await?;
         } else {
-        /*
             let path = std::path::Path::new(env!("OUT_DIR"))
                 .join("res")
                 .join(file_name);
-        */  let txt = std::fs::read_to_string("res/girl3.obj")?;
+            let txt = std::fs::read_to_string(path)?;
         }
     }
 
@@ -42,53 +38,44 @@ pub async fn load_string(file_name: &str) -> anyhow::Result<String> {
 
 pub async fn load_binary(file_name: &str) -> anyhow::Result<Vec<u8>> {
     cfg_if! {
-            if #[cfg(target_arch = "wasm32")] {
-                let url = format_url(file_name);
-                let data = reqwest::get(url)
-                    .await?
-                    .bytes()
-                    .await?
-                    .to_vec();
-            } else {
-    /*
-                let path = std::path::Path::new(env!("OUT_DIR"))
-                    .join("res")
-                    .join(file_name);*/
-                //let data = std::fs::read(path)?;
-                let data = std::fs::read("res/girl3.obj")?;
-            }
+        if #[cfg(target_arch = "wasm32")] {
+            let url = format_url(file_name);
+            let data = reqwest::get(url)
+                .await?
+                .bytes()
+                .await?
+                .to_vec();
+        } else {
+            let path = std::path::Path::new(env!("OUT_DIR"))
+                .join("res")
+                .join(file_name);
+            let data = std::fs::read(path)?;
         }
+    }
 
     Ok(data)
 }
 
 pub async fn load_texture(
     file_name: &str,
-    device: &Device,
-    queue: &Queue,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
 ) -> anyhow::Result<texture::Texture> {
-//    let data = load_binary(file_name).await?;
-    let data = std::fs::read("res/girl3.mtl")?;
-    texture::Texture::from_bytes(&device, &queue, &data, file_name)
+    let data = load_binary(file_name).await?;
+    texture::Texture::from_bytes(device, queue, &data, file_name)
 }
 
 pub async fn load_model(
     file_name: &str,
-    device: &Device,
-    queue: &Queue,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
 ) -> anyhow::Result<model::Model> {
-    /*
-    for i in read_dir("target/release").unwrap() {
-        println!("{:?}", i);
-    }*/
     let obj_text = load_string(file_name).await?;
-    //let mut file = File::open("dragon5.obj").expect("E1");
-    //    let mut obj_text = String::new();
-    //    file.read_to_string(&mut obj_text);
     let obj_cursor = Cursor::new(obj_text);
     let mut obj_reader = BufReader::new(obj_cursor);
-    let obj_materials = tobj::load_obj_buf_async(
+
+    let (models, obj_materials) = tobj::load_obj_buf_async(
         &mut obj_reader,
         &tobj::LoadOptions {
             triangulate: true,
@@ -96,23 +83,15 @@ pub async fn load_model(
             ..Default::default()
         },
         |p| async move {
-            //let mat_text = load_string("girl3.mtl").await.unwrap();
-        //    println!("{mat_text}");
-            //return tobj::load_mtl_buf(&mut BufReader::new(Cursor::new(mat_text)))
-            let mut file = File::open("res/girl3.obj").unwrap();
-            return tobj::load_mtl_buf(&mut BufReader::new(file))
+            let mat_text = load_string(&p).await.unwrap();
+            tobj::load_mtl_buf(&mut BufReader::new(Cursor::new(mat_text)))
         },
     )
     .await?;
+
     let mut materials = Vec::new();
-    //println!("{:?}", obj_materials.1.unwrap().len());
-    for m in obj_materials.1.unwrap() {
-        //println!("tex: {:?}", &m.dissolve_texture);
-        let mut file = File::open("res/girl3.mtl").unwrap();
-        let mut buf = String::new();
-        let diffuse_texture = load_texture("girl3.mtl", device, queue)
-            .await
-            .expect("E3");
+    for m in obj_materials? {
+        let diffuse_texture = load_texture(&m.diffuse_texture.unwrap(), device, queue).await?;
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout,
             entries: &[
@@ -127,13 +106,16 @@ pub async fn load_model(
             ],
             label: None,
         });
+
         materials.push(model::Material {
             name: m.name,
             diffuse_texture,
             bind_group,
         })
     }
-    let meshes = obj_materials.0
+    println!("{}", materials.len());
+
+    let meshes = models
         .into_iter()
         .map(|m| {
             let vertices = (0..m.mesh.positions.len() / 3)
@@ -151,6 +133,7 @@ pub async fn load_model(
                     ],
                 })
                 .collect::<Vec<_>>();
+
             let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("{:?} Vertex Buffer", file_name)),
                 contents: bytemuck::cast_slice(&vertices),
@@ -161,6 +144,7 @@ pub async fn load_model(
                 contents: bytemuck::cast_slice(&m.mesh.indices),
                 usage: wgpu::BufferUsages::INDEX,
             });
+
             model::Mesh {
                 name: file_name.to_string(),
                 vertex_buffer,
@@ -170,6 +154,7 @@ pub async fn load_model(
             }
         })
         .collect::<Vec<_>>();
-    println!("{:?}", materials.len());
+    println!("{}", meshes.len());
+    //    panic!();
     Ok(model::Model { meshes, materials })
 }
