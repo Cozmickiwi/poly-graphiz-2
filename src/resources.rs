@@ -1,6 +1,7 @@
 use std::io::Cursor;
 
-use image::{DynamicImage, ImageBuffer, Rgb};
+use gltf::image::Format;
+use image::{DynamicImage, ImageBuffer, Rgb, Rgba};
 use nalgebra::{Point3, Rotation3, Vector3};
 use wgpu::util::DeviceExt;
 
@@ -37,6 +38,7 @@ fn load_glb(
     let mut meshes = Vec::new();
     let mut materials = Vec::new();
     let angle = -std::f32::consts::FRAC_PI_2;
+    //    let angle = 0.0;
     let axis = Vector3::x_axis();
     let rot = Rotation3::from_axis_angle(&axis, angle);
     for mesh in gltf.meshes() {
@@ -90,23 +92,65 @@ fn load_glb(
             num_elements: indices.len() as u32,
             material: mesh_count as usize,
         });
-        let img = &images[mesh_count as usize];
-        let image_buffer = ImageBuffer::<Rgb<u8>, _>::from_fn(img.width, img.height, |x, y| {
-            let index = (y * img.width + x) as usize * 3;
-            if index >= img.pixels.len() - 1 {
-                return Rgb([
-                    img.pixels[img.pixels.len() - 4],
-                    img.pixels[img.pixels.len() - 3],
-                    img.pixels[img.pixels.len() - 2],
-                ]);
-            }
-            Rgb([
-                img.pixels[index],
-                img.pixels[index + 1],
-                img.pixels[index + 2],
-            ])
-        });
-        let dyn_image = DynamicImage::ImageRgb8(image_buffer);
+        let img;
+        if (mesh_count as usize) < images.len() {
+            img = &images[mesh_count as usize];
+        } else {
+            img = &images[0];
+        }
+        let dyn_image: DynamicImage;
+        if img.format == Format::R8G8B8 || img.format == Format::R8G8 {
+            let image_buffer = ImageBuffer::<Rgb<u8>, _>::from_fn(img.width, img.height, |x, y| {
+                if img.format == Format::R8G8 {
+                    let index = (y * img.width + x) as usize * 2;
+                    if index >= img.pixels.len() - 2 {
+                        return Rgb([
+                            img.pixels[img.pixels.len() - 4],
+                            img.pixels[img.pixels.len() - 3],
+                            0,
+                        ]);
+                    }
+                    return Rgb([img.pixels[index], img.pixels[index + 1], 255]);
+                } else {
+                    let index = (y * img.width + x) as usize * 3;
+                    if index >= img.pixels.len() - 3 {
+                        return Rgb([
+                            img.pixels[img.pixels.len() - 4],
+                            img.pixels[img.pixels.len() - 3],
+                            img.pixels[img.pixels.len() - 2],
+                        ]);
+                    }
+                    return Rgb([
+                        img.pixels[index],
+                        img.pixels[index + 1],
+                        img.pixels[index + 2],
+                    ]);
+                }
+            });
+            dyn_image = DynamicImage::ImageRgb8(image_buffer);
+        } else if img.format == Format::R8G8B8A8 {
+            let image_buffer =
+                ImageBuffer::<Rgba<u8>, _>::from_fn(img.width, img.height, |x, y| {
+                    let index = (y * img.width + x) as usize * 4;
+                    if index >= img.pixels.len() - 4 {
+                        return Rgba([
+                            img.pixels[img.pixels.len() - 4],
+                            img.pixels[img.pixels.len() - 3],
+                            img.pixels[img.pixels.len() - 2],
+                            img.pixels[img.pixels.len() - 1],
+                        ]);
+                    }
+                    Rgba([
+                        img.pixels[index],
+                        img.pixels[index + 1],
+                        img.pixels[index + 2],
+                        img.pixels[index + 3],
+                    ])
+                });
+            dyn_image = DynamicImage::ImageRgba8(image_buffer);
+        } else {
+            panic!("Unsupported image format: {:?}", img.format);
+        }
         let mut buffer: Vec<u8> = Vec::new();
         let mut cursor = Cursor::new(&mut buffer);
         dyn_image
