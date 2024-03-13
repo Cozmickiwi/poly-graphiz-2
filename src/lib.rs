@@ -307,41 +307,6 @@ pub fn rotate_point(point: Point3<f32>, target: Point3<f32>, rot: f32, ax: char)
 /// * `ax`:
 ///
 /// returns: Vec<Vertex, Global>
-/*
-fn rotate_points(point: Point3<f32>, targets: &Vec<Vertex>, rot: f32, ax: char) -> Vec<Vertex> {
-    let axis;
-    match ax {
-        'x' => axis = Vector3::x_axis(),
-        'y' => axis = Vector3::y_axis(),
-        'z' => axis = Vector3::z_axis(),
-        _ => panic!(),
-    }
-    let origin_translation = Translation3::from(-point.coords);
-    //let now = Instant::now();
-    let rotation_matrix = Rotation3::from_axis_angle(&axis, -rot);
-    let q = UnitQuaternion::from_rotation_matrix(&rotation_matrix);
-    let translation_back = Translation3::from(point.coords);
-    let r_points = targets
-        .par_iter()
-        .map(|t| {
-            if t.position[1] == 0.0 {
-                return *t;
-            }
-            let translated_point = origin_translation * Point3::from(t.position);
-            //let rotated_point = rotation_matrix.transform_point(&translated_point);
-            let rotated_point = q.transform_point(&translated_point);
-            let pos = (translation_back * rotated_point).coords;
-            Vertex {
-                position: [pos.x, pos.y, pos.z],
-                tex_coords: t.tex_coords,
-            }
-        })
-        .collect();
-    //let el = now.elapsed();
-    //println!("{:?}", el);
-    r_points
-}
-*/
 fn rotate_points_amount(point: Point3<f32>, rot: f32, ax: char) -> TransformationMatrix {
     let axis = match ax {
         'x' => Vector3::x_axis(),
@@ -360,29 +325,6 @@ fn rotate_points_amount(point: Point3<f32>, rot: f32, ax: char) -> Transformatio
         translation_back: translation_back.into(),
         _padding: [0.0, 0.0],
     }
-    /*
-    let r_points = targets
-        .par_iter()
-        .map(|t| {
-            if t.position[1] == 0.0 {
-                return *t;
-            }
-            let translated_point = origin_translation * Point3::from(t.position);
-            //let rotated_point = rotation_matrix.transform_point(&translated_point);
-            let rotated_point = q.transform_point(&translated_point);
-            let pos = (translation_back * rotated_point).coords;
-            Vertex {
-                position: [pos.x - t.position[0], pos.y - t.position[1], pos.z - t.position[2]],
-                tex_coords: t.tex_coords,
-            }
-        })
-        .collect();
-    //let el = now.elapsed();
-    //println!("{:?}", el);
-    let mut conv: Vec<[f32; 3]> = Vec::new();
-    for i in r_points {
-        conv.push(i.positon);
-    }*/
 }
 
 /// Parses the obj file and returns the vertices and indices.
@@ -902,10 +844,9 @@ impl State {
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         // get_current_texture waits for the surface to provide a new `wgpu::SurfaceTexture` which
         // will be rendered to later.
-        let now = Instant::now();
         let output = self.surface.get_current_texture()?;
         // Create a `wgpu::Textureview` with default settings.
-        println!("draw: {:?}", now.elapsed());
+        //        println!("draw: {:?}", now.elapsed());
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -932,9 +873,9 @@ impl State {
                 ops: wgpu::Operations {
                     // Clear screen
                     load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.0,
-                        g: 0.0,
-                        b: 0.0,
+                        r: 0.62,
+                        g: 0.64,
+                        b: 0.91,
                         a: 1.0,
                     }),
                     store: wgpu::StoreOp::Store,
@@ -1025,9 +966,10 @@ pub async fn run() {
         'z',
     );
     println!("{:?}", test_rotation);
-    let mut switch = false;
     let mut frame_timer = Instant::now();
     let mut rot = 0.0;
+    let mut tick: u8 = 0;
+    let mut fps_count = 0.0;
     // Initialize event loop
     event_loop.run(move |event, _, control_flow| match event {
         // Check if os has sent an event to the window
@@ -1061,10 +1003,13 @@ pub async fn run() {
         Event::RedrawRequested(window_id) if window_id == state.window().id() => {
             let el = frame_timer.elapsed();
             let delta = 144.0 * el.as_secs_f32();
-            if switch {
-                println!("{:?}fps", (144.0 / delta) as u32);
+            tick += 1;
+            fps_count += 144.0 / delta;
+            if tick == 200 {
+                tick = 0;
+                println!("{:?}fps", (fps_count / 200.0) as u32);
+                fps_count = 0.0;
             }
-            switch = !switch;
             frame_timer = Instant::now();
             rot += 0.001 * delta;
             if rot >= PI * 2.0 {

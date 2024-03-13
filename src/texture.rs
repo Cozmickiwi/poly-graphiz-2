@@ -1,5 +1,5 @@
 use anyhow::*;
-use image::GenericImageView;
+use image::{GenericImageView};
 
 pub struct Texture {
     pub texture: wgpu::Texture,
@@ -54,6 +54,7 @@ impl Texture {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         bytes: &[u8],
+        //image: DynamicImage,
         label: &str,
     ) -> Result<Self> {
         let img = image::load_from_memory(bytes)?;

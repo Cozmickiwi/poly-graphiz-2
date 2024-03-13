@@ -1,6 +1,7 @@
-use std::io::{BufReader, Cursor};
+use std::io::Cursor;
 
-use cfg_if::cfg_if;
+use image::{DynamicImage, ImageBuffer, Rgb};
+use nalgebra::{Point3, Rotation3, Vector3};
 use wgpu::util::DeviceExt;
 
 use crate::{model, texture};
@@ -17,78 +18,107 @@ fn format_url(file_name: &str) -> reqwest::Url {
     base.join(file_name).unwrap()
 }
 
-pub async fn load_string(file_name: &str) -> anyhow::Result<String> {
-    cfg_if! {
-        if #[cfg(target_arch = "wasm32")] {
-            let url = format_url(file_name);
-            let txt = reqwest::get(url)
-                .await?
-                .text()
-                .await?;
-        } else {
-            let path = std::path::Path::new(env!("OUT_DIR"))
-                .join("res")
-                .join(file_name);
-            let txt = std::fs::read_to_string(path)?;
-        }
-    }
-
-    Ok(txt)
-}
-
-pub async fn load_binary(file_name: &str) -> anyhow::Result<Vec<u8>> {
-    cfg_if! {
-        if #[cfg(target_arch = "wasm32")] {
-            let url = format_url(file_name);
-            let data = reqwest::get(url)
-                .await?
-                .bytes()
-                .await?
-                .to_vec();
-        } else {
-            let path = std::path::Path::new(env!("OUT_DIR"))
-                .join("res")
-                .join(file_name);
-            let data = std::fs::read(path)?;
-        }
-    }
-    Ok(data)
-}
-
-pub async fn load_texture(
-    file_name: &str,
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-) -> anyhow::Result<texture::Texture> {
-    let data = load_binary(file_name).await?;
-    texture::Texture::from_bytes(device, queue, &data, file_name)
-}
-
 pub async fn load_model(
     file_name: &str,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
 ) -> anyhow::Result<model::Model> {
-    let obj_text = load_string(file_name).await?;
-    let obj_cursor = Cursor::new(obj_text);
-    let mut obj_reader = BufReader::new(obj_cursor);
-    let (models, obj_materials) = tobj::load_obj_buf_async(
-        &mut obj_reader,
-        &tobj::LoadOptions {
-            triangulate: true,
-            single_index: true,
-            ..Default::default()
-        },
-        |p| async move {
-            let mat_text = load_string(&p).await.unwrap();
-            tobj::load_mtl_buf(&mut BufReader::new(Cursor::new(mat_text)))
-        },
-    )
-    .await?;
+    return Ok(load_glb(device, queue, layout, file_name));
+}
+fn load_glb(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+    file_name: &str,
+) -> model::Model {
+    let (gltf, buffers, images) = gltf::import(file_name).unwrap();
+    let mut mesh_count: u32 = 0;
+    let mut meshes = Vec::new();
     let mut materials = Vec::new();
-    for m in obj_materials? {
-        let diffuse_texture = load_texture(&m.diffuse_texture.unwrap(), device, queue).await?;
+    let angle = -std::f32::consts::FRAC_PI_2;
+    let axis = Vector3::x_axis();
+    let rot = Rotation3::from_axis_angle(&axis, angle);
+    for mesh in gltf.meshes() {
+        let mut vertices: Vec<[f32; 3]> = Vec::new();
+        let mut point3v = Vec::new();
+        let mut vertices2 = Vec::new();
+        let mut indices = Vec::new();
+        let mut normals: Vec<[f32; 3]> = Vec::new();
+        let mut texture_coords: Vec<[f32; 2]> = Vec::new();
+        for primitive in mesh.primitives() {
+            let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
+            if let Some(viter) = reader.read_positions() {
+                vertices = viter.collect();
+            }
+            for v in &vertices {
+                let mut point = Point3::new(v[0], v[1], v[2]);
+                point = rot.transform_point(&point);
+                point3v.push([point.x, point.y, point.z]);
+            }
+            if let Some(normiter) = reader.read_normals() {
+                normals = normiter.collect();
+            }
+            if let Some(texiter) = reader.read_tex_coords(0) {
+                texture_coords = texiter.into_f32().collect();
+            }
+            for i in 0..vertices.len() {
+                vertices2.push(model::ModelVertex {
+                    position: point3v[i],
+                    tex_coords: texture_coords[i],
+                    normal: normals[i],
+                });
+            }
+            if let Some(initer) = reader.read_indices() {
+                indices = initer.into_u32().collect();
+            }
+        }
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{} Vertex Buffer", mesh_count)),
+            contents: bytemuck::cast_slice(&vertices2),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{} Index Buffer", mesh_count)),
+            contents: bytemuck::cast_slice(&indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        meshes.push(model::Mesh {
+            name: format!("Mesh{mesh_count}"),
+            vertex_buffer,
+            index_buffer,
+            num_elements: indices.len() as u32,
+            material: mesh_count as usize,
+        });
+        let img = &images[mesh_count as usize];
+        let image_buffer = ImageBuffer::<Rgb<u8>, _>::from_fn(img.width, img.height, |x, y| {
+            let index = (y * img.width + x) as usize * 3;
+            if index >= img.pixels.len() - 1 {
+                return Rgb([
+                    img.pixels[img.pixels.len() - 4],
+                    img.pixels[img.pixels.len() - 3],
+                    img.pixels[img.pixels.len() - 2],
+                ]);
+            }
+            Rgb([
+                img.pixels[index],
+                img.pixels[index + 1],
+                img.pixels[index + 2],
+            ])
+        });
+        let dyn_image = DynamicImage::ImageRgb8(image_buffer);
+        let mut buffer: Vec<u8> = Vec::new();
+        let mut cursor = Cursor::new(&mut buffer);
+        dyn_image
+            .write_to(&mut cursor, image::ImageFormat::Png)
+            .unwrap();
+        let diffuse_texture = texture::Texture::from_bytes(
+            device,
+            queue,
+            bytemuck::cast_slice(cursor.get_ref()),
+            &format!("Mesh{mesh_count}"),
+        )
+        .unwrap();
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout,
             entries: &[
@@ -104,47 +134,11 @@ pub async fn load_model(
             label: None,
         });
         materials.push(model::Material {
-            name: m.name,
+            name: format!("Mesh{mesh_count}"),
             diffuse_texture,
             bind_group,
-        })
+        });
+        mesh_count += 1;
     }
-    let meshes = models
-        .into_iter()
-        .map(|m| {
-            let vertices = (0..m.mesh.positions.len() / 3)
-                .map(|i| model::ModelVertex {
-                    position: [
-                        m.mesh.positions[i * 3],
-                        m.mesh.positions[i * 3 + 1],
-                        m.mesh.positions[i * 3 + 2],
-                    ],
-                    tex_coords: [m.mesh.texcoords[i * 2], 1.0 - m.mesh.texcoords[i * 2 + 1]],
-                    normal: [
-                        m.mesh.normals[i * 3],
-                        m.mesh.normals[i * 3 + 1],
-                        m.mesh.normals[i * 3 + 2],
-                    ],
-                })
-                .collect::<Vec<_>>();
-            let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("{:?} Vertex Buffer", file_name)),
-                contents: bytemuck::cast_slice(&vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-            let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("{:?} Index Buffer", file_name)),
-                contents: bytemuck::cast_slice(&m.mesh.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            });
-            model::Mesh {
-                name: file_name.to_string(),
-                vertex_buffer,
-                index_buffer,
-                num_elements: m.mesh.indices.len() as u32,
-                material: m.mesh.material_id.unwrap_or(0),
-            }
-        })
-        .collect::<Vec<_>>();
-    Ok(model::Model { meshes, materials })
+    model::Model { meshes, materials }
 }
