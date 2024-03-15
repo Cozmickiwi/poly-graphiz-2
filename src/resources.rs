@@ -24,23 +24,38 @@ pub async fn load_model(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
+    address_mode: wgpu::AddressMode,
+    transform: [f32; 3],
+    rotation: f32,
 ) -> anyhow::Result<model::Model> {
-    return Ok(load_glb(device, queue, layout, file_name));
+    return Ok(load_glb(
+        device,
+        queue,
+        layout,
+        file_name,
+        address_mode,
+        transform,
+        rotation,
+    ));
 }
 fn load_glb(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
     file_name: &str,
+    address_mode: wgpu::AddressMode,
+    transform: [f32; 3],
+    rotation: f32,
 ) -> model::Model {
-    let (gltf, buffers, images) = gltf::import(file_name).unwrap();
+    let (gltf, buffers, imgs) = gltf::import(file_name).unwrap();
     let mut mesh_count: u32 = 0;
     let mut meshes = Vec::new();
     let mut materials = Vec::new();
-    let angle = -std::f32::consts::FRAC_PI_2;
-    //    let angle = 0.0;
+    //let angle = -std::f32::consts::FRAC_PI_2;
+    //let angle = 0.0;
     let axis = Vector3::x_axis();
-    let rot = Rotation3::from_axis_angle(&axis, angle);
+    let rot = Rotation3::from_axis_angle(&axis, rotation);
+    println!("Images: {}", imgs.len());
     for mesh in gltf.meshes() {
         let mut vertices: Vec<[f32; 3]> = Vec::new();
         let mut point3v = Vec::new();
@@ -48,6 +63,12 @@ fn load_glb(
         let mut indices = Vec::new();
         let mut normals: Vec<[f32; 3]> = Vec::new();
         let mut texture_coords: Vec<[f32; 2]> = Vec::new();
+        let mut images = Vec::new();
+        for i in &imgs {
+            if i.format != Format::R8G8 && i.format != Format::R8 {
+                images.push(i);
+            }
+        }
         for primitive in mesh.primitives() {
             let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
             if let Some(viter) = reader.read_positions() {
@@ -56,7 +77,11 @@ fn load_glb(
             for v in &vertices {
                 let mut point = Point3::new(v[0], v[1], v[2]);
                 point = rot.transform_point(&point);
-                point3v.push([point.x, point.y, point.z]);
+                point3v.push([
+                    point.x + transform[0],
+                    point.y + transform[1],
+                    point.z + transform[2],
+                ]);
             }
             if let Some(normiter) = reader.read_normals() {
                 normals = normiter.collect();
@@ -68,6 +93,7 @@ fn load_glb(
                 vertices2.push(model::ModelVertex {
                     position: point3v[i],
                     tex_coords: texture_coords[i],
+                    //tex_coords: [texture_coords[i][0] / 4.0, texture_coords[i][1] / 4.0],
                     normal: normals[i],
                 });
             }
@@ -154,13 +180,14 @@ fn load_glb(
         let mut buffer: Vec<u8> = Vec::new();
         let mut cursor = Cursor::new(&mut buffer);
         dyn_image
-            .write_to(&mut cursor, image::ImageFormat::Png)
+            .write_to(&mut cursor, image::ImageFormat::Jpeg)
             .unwrap();
         let diffuse_texture = texture::Texture::from_bytes(
             device,
             queue,
             bytemuck::cast_slice(cursor.get_ref()),
             &format!("Mesh{mesh_count}"),
+            address_mode,
         )
         .unwrap();
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -184,5 +211,6 @@ fn load_glb(
         });
         mesh_count += 1;
     }
-    model::Model { meshes, materials }
+    println!("meshes: {}", meshes.len());
+    model::Model { meshes, materials, pos: transform }
 }

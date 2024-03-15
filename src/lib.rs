@@ -9,6 +9,7 @@ use model::Vertex;
 use std::f32::consts::PI;
 use std::mem::size_of_val;
 use std::{fs::File, io::Read, iter::once, mem, time::Instant};
+use wgpu::AddressMode;
 
 use nalgebra::{
     Matrix4, Perspective3, Point3, Rotation3, Translation3, Unit, UnitQuaternion, Vector3,
@@ -65,6 +66,7 @@ impl Camera {
 struct CameraUniform {
     /// The projection matrix of the camera. The projection matrix is used to transform the 3D
     /// scene into a 2D representation.
+    view_pos: [f32; 4],
     view_proj: [[f32; 4]; 4],
 }
 
@@ -72,12 +74,14 @@ impl CameraUniform {
     /// Constructs a new `CameraUniform`.
     fn new() -> Self {
         Self {
+            view_pos: [0.0; 4],
             view_proj: Matrix4::identity().into(),
         }
     }
     /// Updates the projection matrix of the camera.
     fn update_projection(&mut self, camera: &Camera) {
-        self.view_proj = camera.build_projection_matrix().into();
+        self.view_pos = camera.eye.to_homogeneous().into();
+        self.view_proj = (OPENGL_TO_WGPU_MATRIX * camera.build_projection_matrix()).into();
     }
 }
 
@@ -320,10 +324,11 @@ fn rotate_points_amount(point: Point3<f32>, rot: f32, ax: char) -> Transformatio
     //let now = Instant::now();
     let rotation_matrix = Rotation3::from_axis_angle(&axis, -rot);
     //let q = UnitQuaternion::from_rotation_matrix(&rotation_matrix);
-    let translation_back = Translation3::from(point.coords);
+    let translation_back = Translation3::from(point.coords);    
     TransformationMatrix {
         tmatrix: rotation_matrix.to_homogeneous().into(),
-        origin_translation: origin_translation.into(),
+        //origin_translation: origin_translation.into(),
+        origin_translation: [-10.0, 1.0, 0.0],
         translation_back: translation_back.into(),
         _padding: [0.0, 0.0],
     }
@@ -496,6 +501,8 @@ fn create_render_pipeline(
     })
 }
 
+const ROTATION: f32 = 0.0;
+
 /// The state of the program. This is where the main logic of the program is stored.
 /// This is the first struct that is created when the program is run.
 struct State {
@@ -555,7 +562,7 @@ struct State {
     transform_buffer: wgpu::Buffer,
     transform_bind_group: wgpu::BindGroup,
     depth_texture: texture::Texture,
-    obj_model: model::Model,
+    models: Vec<model::Model>,
     light_model: model::Model,
     light_uniform: LightUniform,
     light_buffer: wgpu::Buffer,
@@ -632,8 +639,12 @@ impl State {
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: Vec::new(),
         };
-        let depth_texture =
-            texture::Texture::create_depth_texture(&device, &config, "depth_texture");
+        let depth_texture = texture::Texture::create_depth_texture(
+            &device,
+            &config,
+            "depth_texture",
+            AddressMode::ClampToEdge,
+        );
         surface.configure(&device, &config);
         let instances = (0..NUM_INSTANCES_PER_ROW)
             .flat_map(|z| {
@@ -659,7 +670,7 @@ impl State {
             })
             .collect::<Vec<_>>();
         let light_uniform = LightUniform {
-            position: [2.0, 2.0, 2.0],
+            position: [2.0, 4.0, 2.0],
             _padding: 0,
             color: [1.0, 1.0, 1.0],
             _padding2: 0,
@@ -727,9 +738,14 @@ impl State {
             }],
         });
         let diffuse_bytes = include_bytes!("../happy-tree.png");
-        let diffuse_texture =
-            texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "../happy-tree.png")
-                .unwrap();
+        let diffuse_texture = texture::Texture::from_bytes(
+            &device,
+            &queue,
+            diffuse_bytes,
+            "../happy-tree.png",
+            wgpu::AddressMode::ClampToEdge,
+        )
+        .unwrap();
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("texture_bind_group_layout"),
@@ -766,19 +782,41 @@ impl State {
                 },
             ],
         });
-        let obj_model = resources::load_model(
-            "res/dragon2.glb",
-            &device,
-            &queue,
-            &texture_bind_group_layout,
-        )
-        .await
-        .unwrap();
+        let mut models = Vec::new();
+        models.push(
+            resources::load_model(
+                "res/ter.glb",
+                &device,
+                &queue,
+                &texture_bind_group_layout,
+                AddressMode::ClampToEdge,
+                [0.0, 0.0, 0.0],
+                0.0,
+            )
+            .await
+            .unwrap(),
+        );
+        models.push(
+            resources::load_model(
+                "res/dragon2.glb",
+                &device,
+                &queue,
+                &texture_bind_group_layout,
+                AddressMode::ClampToEdge,
+                [-10.0, 1.0, 0.0],
+                -std::f32::consts::FRAC_PI_2,
+            )
+            .await
+            .unwrap(),
+        );
         let light_model = resources::load_model(
             "res/cube_companion.glb",
             &device,
             &queue,
             &texture_bind_group_layout,
+            AddressMode::ClampToEdge,
+            [0.0, 0.0, 0.0],
+            0.0,
         )
         .await
         .unwrap();
@@ -807,7 +845,7 @@ impl State {
                 label: Some("camera_bind_group_layout"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -835,6 +873,17 @@ impl State {
                 ],
                 push_constant_ranges: &[],
             });
+        let transform_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance, 
+            attributes: &[
+                wgpu::VertexAttribute {
+                    shader_location: 0,
+                    offset: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+            ],
+        };
         let render_pipeline = {
             let shader = wgpu::ShaderModuleDescriptor {
                 label: Some("Normal Shader"),
@@ -888,7 +937,7 @@ impl State {
             transform_buffer,
             transform_bind_group,
             depth_texture,
-            obj_model,
+            models,
             light_model,
             light_uniform,
             light_buffer,
@@ -912,8 +961,12 @@ impl State {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
-            self.depth_texture =
-                texture::Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
+            self.depth_texture = texture::Texture::create_depth_texture(
+                &self.device,
+                &self.config,
+                "depth_texture",
+                AddressMode::ClampToEdge,
+            );
         }
     }
     ///
@@ -1027,13 +1080,15 @@ impl State {
             &self.light_bind_group,
         );
         render_pass.set_pipeline(&self.render_pipeline);
-        render_pass.draw_model_instanced(
-            &self.obj_model,
-            0..self.instances.len() as u32,
-            &self.camera_bind_group,
-            &self.light_bind_group,
-            &self.transform_bind_group,
-        );
+        for m in &self.models {
+            render_pass.draw_model_instanced(
+                m,
+                0..self.instances.len() as u32,
+                &self.camera_bind_group,
+                &self.light_bind_group,
+                &self.transform_bind_group,
+            );
+        }
         /*
         for i in 0..self.obj_model.meshes.len() {
             let mesh = &self.obj_model.meshes[i];
@@ -1149,6 +1204,7 @@ pub async fn run() {
             }
             frame_timer = Instant::now();
             rot += 0.001 * delta;
+            //            rot += 0.001 * delta;
             if rot >= PI * 2.0 {
                 rot = 0.0;
             }

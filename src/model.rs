@@ -17,6 +17,7 @@ pub struct ModelVertex {
 pub struct Model {
     pub meshes: Vec<Mesh>,
     pub materials: Vec<Material>,
+    pub pos: [f32; 3],
 }
 
 pub struct Material {

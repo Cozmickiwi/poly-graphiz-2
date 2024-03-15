@@ -14,6 +14,7 @@ impl Texture {
         device: &wgpu::Device,
         config: &wgpu::SurfaceConfiguration,
         label: &str,
+        address_mode: wgpu::AddressMode,
     ) -> Self {
         let size = wgpu::Extent3d {
             width: config.width,
@@ -33,9 +34,9 @@ impl Texture {
         let texture = device.create_texture(&desc);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            address_mode_u: address_mode,
+            address_mode_v: address_mode,
+            address_mode_w: address_mode,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::FilterMode::Nearest,
@@ -56,15 +57,17 @@ impl Texture {
         bytes: &[u8],
         //image: DynamicImage,
         label: &str,
+        address_mode: wgpu::AddressMode,
     ) -> Result<Self> {
         let img = image::load_from_memory(bytes)?;
-        Self::from_image(device, queue, &img, Some(label))
+        Self::from_image(device, queue, &img, Some(label), address_mode)
     }
     pub fn from_image(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         img: &image::DynamicImage,
         label: Option<&str>,
+        address_mode: wgpu::AddressMode,
     ) -> Result<Self> {
         let rgba = img.to_rgba8();
         let dimensions = img.dimensions();
@@ -102,9 +105,9 @@ impl Texture {
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            address_mode_u: address_mode,
+            address_mode_v: address_mode,
+            address_mode_w: address_mode,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Nearest,
             mipmap_filter: wgpu::FilterMode::Nearest,
