@@ -272,17 +272,17 @@ impl CameraController {
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct TransformationMatrix {
-    tmatrix: [[[f32; 4]; 4]; 2],
-    object_pos: [[f32; 3]; 2],
-    _padding: [[f32; 2]; 13],
+    tmatrix: [[[f32; 4]; 4]; 3],
+    object_pos: [[f32; 3]; 3],
+    _padding: [f32; 7],
 }
 
 impl TransformationMatrix {
     fn new() -> Self {
         Self {
-            tmatrix: [rotate_points_amount(Point3::default(), 0.0, 'y'); 2],
-            object_pos: [[0.0; 3]; 2],
-            _padding: [[0.0; 2]; 13],
+            tmatrix: [rotate_points_amount(Point3::default(), 0.0, 'y'); 3],
+            object_pos: [[0.0; 3]; 3],
+            _padding: [0.0; 7],
         }
     }
 }
@@ -675,7 +675,7 @@ impl State {
             })
             .collect::<Vec<_>>();
         let light_uniform = LightUniform {
-            position: [40.0, 50.0, 40.0],
+            position: [-5.0, 10.0, 20.0],
             _padding: 0,
             color: [1.0, 1.0, 1.0],
             _padding2: 0,
@@ -803,6 +803,20 @@ impl State {
             .unwrap(),
         );
         models.push(
+            resources::load_model(
+                "res/dragon3.glb",
+                &device,
+                &queue,
+                &texture_bind_group_layout,
+                AddressMode::ClampToEdge,
+                [-10.0, 1.0, 5.0],
+                -std::f32::consts::FRAC_PI_2,
+                1,
+            )
+            .await
+            .unwrap(),
+        );
+        models.push(
             /*
             resources::load_model(
                 "res/dragon2.glb",
@@ -824,11 +838,12 @@ impl State {
                 AddressMode::Repeat,
                 [0.0, 0.0, 0.0],
                 0.0,
-                1,
+                2,
             )
             .await
             .unwrap(),
         );
+
         let light_model = resources::load_model(
             "res/cube_companion.glb",
             &device,
@@ -1005,7 +1020,7 @@ impl State {
     /// * `delta`:
     ///
     /// returns: ()
-    fn update(&mut self, delta: f32, rot: f32) {
+    fn update(&mut self, delta: f32, rot: f32, rot2: f32) {
         self.camera_controller
             .update_camera(&mut self.camera, delta);
         self.camera_uniform.update_projection(&self.camera);
@@ -1023,12 +1038,13 @@ impl State {
         let test_tmx = TransformationMatrix {
             tmatrix: [
                 rotate_points_amount(Point3::default(), rot, 'y'),
+                rotate_points_amount(Point3::default(), -rot2, 'y'),
                 rotate_points_amount(Point3::default(), 0.0, 'y'),
             ],
             //object_pos: [self.models[0].pos, self.models[1].pos],
             //            object_pos: [[5.0, 0.0, 0.0], [-10.0, 1.0, 0.0]],
-            object_pos: [[5.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
-            _padding: [[0.0; 2]; 13],
+            object_pos: [[5.0, 1.5, 0.0], [-10.0, 1.0, 5.0], [0.0, 0.0, 0.0]],
+            _padding: [0.0; 7],
         };
         self.queue
             .write_buffer(&self.transform_buffer, 0, bytemuck::cast_slice(&[test_tmx]));
@@ -1113,12 +1129,12 @@ impl State {
             &self.light_bind_group,
         );
         render_pass.set_pipeline(&self.render_pipeline);
-        let mut plane = false;
+        let mut plane = 0;
         for m in &self.models {
             let ic;
-            if !plane {
+            if plane < 2 {
                 ic = ci..(ci + 1);
-                plane = true;
+                plane += 1;
             } else {
                 ic = 0..self.instances.len() as u32;
             }
@@ -1201,6 +1217,7 @@ pub async fn run() {
     println!("{:?}", test_rotation);
     let mut frame_timer = Instant::now();
     let mut rot = 0.0;
+    let mut rot2 = 0.0;
     let mut tick: u8 = 0;
     let mut fps_count = 0.0;
     let mut center_instance: u32 = 0;
@@ -1255,7 +1272,12 @@ pub async fn run() {
             if rot >= PI * 2.0 {
                 rot = 0.0;
             }
-            state.update(delta, rot);
+            rot2 += 0.0005 * delta;
+            //            rot += 0.001 * delta;
+            if rot2 >= PI * 2.0 {
+                rot2 = 0.0;
+            }
+            state.update(delta, rot, rot2);
             match state.render(center_instance) {
                 Ok(_) => {}
                 // Reconfigure the surface if lost

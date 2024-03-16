@@ -16,8 +16,8 @@ struct Camera {
 var<uniform> camera: Camera;
 
 struct TransformationMatrix {
-    tmatrix: array<mat4x4<f32>, 2>,
-    object_pos: array<vec3<f32>, 2>,
+    tmatrix: array<mat4x4<f32>, 3>,
+    object_pos: array<vec3<f32>, 3>,
 };
 
 struct Light {
@@ -56,10 +56,11 @@ fn vs_main(
         instance.model_matrix_3,
     );
     var out: VertexOutput;
-    var myArray: array<vec3<f32>, 2>;
+    var myArray: array<vec3<f32>, 3>;
     myArray[0] = vec3<f32>(5.0, 1.5, 0.0);
 //    myArray[1] = vec3<f32>(-10.0, 1.0, 0.0);
-    myArray[1] = vec3<f32>(0.0, 0.0, 0.0);
+    myArray[1] = vec3<f32>(-10.0, 1.0, 5.0);
+    myArray[2] = vec3<f32>(0.0, 0.0, 0.0);
     //let pos = vec3<f32>(transfmatrix.object_pos[model.tmindex]);
     let pos = vec3<f32>(myArray[model.tmindex]);
     let rm = transfmatrix.tmatrix[model.tmindex];
@@ -85,7 +86,7 @@ var s_diffuse: sampler;
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let object_color: vec4<f32> = textureSample(t_diffuse, s_diffuse, in.tex_coords);
-    let ambient_strength = 0.075;
+    let ambient_strength = 0.2;
     let ambient_color = light.color * ambient_strength;
     let light_dir = normalize(light.position - in.world_position);
     let diffuse_strength = max(dot(in.world_normal, light_dir), 0.0);
