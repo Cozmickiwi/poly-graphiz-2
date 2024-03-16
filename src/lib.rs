@@ -262,10 +262,9 @@ impl CameraController {
 ///
 /// # Arguments
 ///
-/// * `point`:
-/// * `target`:
-/// * `rot`:
-/// * `ax`:
+/// * `tmatrix`:
+/// * `object_pos`:
+/// * `_padding`:
 ///
 /// returns: OPoint<f32, Const<3>>
 
@@ -273,15 +272,18 @@ impl CameraController {
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct TransformationMatrix {
-    tmatrix: [[f32; 4]; 4],
-    origin_translation: [f32; 3],
-    translation_back: [f32; 3],
-    _padding: [f32; 2],
+    tmatrix: [[[f32; 4]; 4]; 2],
+    object_pos: [[f32; 3]; 2],
+    _padding: [[f32; 2]; 13],
 }
 
 impl TransformationMatrix {
     fn new() -> Self {
-        rotate_points_amount(Point3::default(), 0.0, 'y')
+        Self {
+            tmatrix: [rotate_points_amount(Point3::default(), 0.0, 'y'); 2],
+            object_pos: [[0.0; 3]; 2],
+            _padding: [[0.0; 2]; 13],
+        }
     }
 }
 
@@ -313,7 +315,7 @@ pub fn rotate_point(point: Point3<f32>, target: Point3<f32>, rot: f32, ax: char)
 /// * `ax`:
 ///
 /// returns: Vec<Vertex, Global>
-fn rotate_points_amount(point: Point3<f32>, rot: f32, ax: char) -> TransformationMatrix {
+fn rotate_points_amount(point: Point3<f32>, rot: f32, ax: char) -> [[f32; 4]; 4] {
     let axis = match ax {
         'x' => Vector3::x_axis(),
         'y' => Vector3::y_axis(),
@@ -324,14 +326,16 @@ fn rotate_points_amount(point: Point3<f32>, rot: f32, ax: char) -> Transformatio
     //let now = Instant::now();
     let rotation_matrix = Rotation3::from_axis_angle(&axis, -rot);
     //let q = UnitQuaternion::from_rotation_matrix(&rotation_matrix);
-    let translation_back = Translation3::from(point.coords);    
+    let translation_back = Translation3::from(point.coords);
+    return rotation_matrix.to_homogeneous().into();
+    /*
     TransformationMatrix {
         tmatrix: rotation_matrix.to_homogeneous().into(),
         //origin_translation: origin_translation.into(),
         origin_translation: [-10.0, 1.0, 0.0],
         translation_back: translation_back.into(),
         _padding: [0.0, 0.0],
-    }
+    }*/
 }
 
 /// Parses the obj file and returns the vertices and indices.
@@ -377,6 +381,7 @@ struct LightUniform {
     _padding2: u32,
 }
 
+#[derive(Debug)]
 struct Instance {
     position: Vector3<f32>,
     rotation: UnitQuaternion<f32>,
@@ -434,14 +439,14 @@ impl InstanceRaw {
     }
 }
 
-const NUM_INSTANCES_PER_ROW: u32 = 1;
+const NUM_INSTANCES_PER_ROW: u32 = 20;
 const INSTANCE_DISPLACEMENT: Vector3<f32> = Vector3::new(
     NUM_INSTANCES_PER_ROW as f32 * 0.5,
     0.0,
     NUM_INSTANCES_PER_ROW as f32 * 0.5,
 );
 
-const INSTANCE_SPACING: f32 = 9.0;
+const INSTANCE_SPACING: f32 = 1.0;
 
 fn create_render_pipeline(
     device: &wgpu::Device,
@@ -670,7 +675,7 @@ impl State {
             })
             .collect::<Vec<_>>();
         let light_uniform = LightUniform {
-            position: [2.0, 4.0, 2.0],
+            position: [40.0, 50.0, 40.0],
             _padding: 0,
             color: [1.0, 1.0, 1.0],
             _padding2: 0,
@@ -790,13 +795,15 @@ impl State {
                 &queue,
                 &texture_bind_group_layout,
                 AddressMode::ClampToEdge,
-                [0.0, 0.0, 0.0],
+                [5.0, 1.5, 0.0],
                 0.0,
+                0,
             )
             .await
             .unwrap(),
         );
         models.push(
+            /*
             resources::load_model(
                 "res/dragon2.glb",
                 &device,
@@ -805,6 +812,19 @@ impl State {
                 AddressMode::ClampToEdge,
                 [-10.0, 1.0, 0.0],
                 -std::f32::consts::FRAC_PI_2,
+                1,
+            )
+            .await
+            .unwrap(),*/
+            resources::load_model(
+                "res/planeee.glb",
+                &device,
+                &queue,
+                &texture_bind_group_layout,
+                AddressMode::Repeat,
+                [0.0, 0.0, 0.0],
+                0.0,
+                1,
             )
             .await
             .unwrap(),
@@ -817,6 +837,7 @@ impl State {
             AddressMode::ClampToEdge,
             [0.0, 0.0, 0.0],
             0.0,
+            2,
         )
         .await
         .unwrap();
@@ -875,14 +896,12 @@ impl State {
             });
         let transform_layout = wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Instance, 
-            attributes: &[
-                wgpu::VertexAttribute {
-                    shader_location: 0,
-                    offset: 0,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-            ],
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[wgpu::VertexAttribute {
+                shader_location: 0,
+                offset: 0,
+                format: wgpu::VertexFormat::Float32x3,
+            }],
         };
         let render_pipeline = {
             let shader = wgpu::ShaderModuleDescriptor {
@@ -995,11 +1014,25 @@ impl State {
             0,
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
+        /*
         self.queue.write_buffer(
             &self.transform_buffer,
             0,
             bytemuck::cast_slice(&[rotate_points_amount(Point3::default(), rot, 'y')]),
-        );
+        );*/
+        let test_tmx = TransformationMatrix {
+            tmatrix: [
+                rotate_points_amount(Point3::default(), rot, 'y'),
+                rotate_points_amount(Point3::default(), 0.0, 'y'),
+            ],
+            //object_pos: [self.models[0].pos, self.models[1].pos],
+            //            object_pos: [[5.0, 0.0, 0.0], [-10.0, 1.0, 0.0]],
+            object_pos: [[5.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+            _padding: [[0.0; 2]; 13],
+        };
+        self.queue
+            .write_buffer(&self.transform_buffer, 0, bytemuck::cast_slice(&[test_tmx]));
+        /*
         let old_position: Vector3<_> = self.light_uniform.position.into();
         self.light_uniform.position =
             (UnitQuaternion::from_axis_angle(&Vector3::y_axis(), (0.05 * delta).to_radians())
@@ -1009,14 +1042,14 @@ impl State {
             &self.light_buffer,
             0,
             bytemuck::cast_slice(&[self.light_uniform]),
-        );
+        );*/
     }
     ///
     ///
     /// # Arguments
     ///
     /// returns: Result<(), wgpu::SurfaceError>
-    fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, ci: u32) -> Result<(), wgpu::SurfaceError> {
         // get_current_texture waits for the surface to provide a new `wgpu::SurfaceTexture` which
         // will be rendered to later.
         let output = self.surface.get_current_texture()?;
@@ -1080,10 +1113,18 @@ impl State {
             &self.light_bind_group,
         );
         render_pass.set_pipeline(&self.render_pipeline);
+        let mut plane = false;
         for m in &self.models {
+            let ic;
+            if !plane {
+                ic = ci..(ci + 1);
+                plane = true;
+            } else {
+                ic = 0..self.instances.len() as u32;
+            }
             render_pass.draw_model_instanced(
                 m,
-                0..self.instances.len() as u32,
+                ic,
                 &self.camera_bind_group,
                 &self.light_bind_group,
                 &self.transform_bind_group,
@@ -1162,6 +1203,12 @@ pub async fn run() {
     let mut rot = 0.0;
     let mut tick: u8 = 0;
     let mut fps_count = 0.0;
+    let mut center_instance: u32 = 0;
+    for i in 0..state.instances.len() {
+        if state.instances[i].position == Vector3::new(0.0, 0.0, 0.0) {
+            center_instance = i as u32;
+        }
+    }
     // Initialize event loop
     event_loop.run(move |event, _, control_flow| match event {
         // Check if os has sent an event to the window
@@ -1209,7 +1256,7 @@ pub async fn run() {
                 rot = 0.0;
             }
             state.update(delta, rot);
-            match state.render() {
+            match state.render(center_instance) {
                 Ok(_) => {}
                 // Reconfigure the surface if lost
                 Err(wgpu::SurfaceError::Lost) => state.resize(state.size),

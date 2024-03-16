@@ -27,6 +27,7 @@ pub async fn load_model(
     address_mode: wgpu::AddressMode,
     transform: [f32; 3],
     rotation: f32,
+    tmindex: u32,
 ) -> anyhow::Result<model::Model> {
     return Ok(load_glb(
         device,
@@ -36,6 +37,7 @@ pub async fn load_model(
         address_mode,
         transform,
         rotation,
+        tmindex,
     ));
 }
 fn load_glb(
@@ -46,6 +48,7 @@ fn load_glb(
     address_mode: wgpu::AddressMode,
     transform: [f32; 3],
     rotation: f32,
+    tmindex: u32,
 ) -> model::Model {
     let (gltf, buffers, imgs) = gltf::import(file_name).unwrap();
     let mut mesh_count: u32 = 0;
@@ -95,6 +98,7 @@ fn load_glb(
                     tex_coords: texture_coords[i],
                     //tex_coords: [texture_coords[i][0] / 4.0, texture_coords[i][1] / 4.0],
                     normal: normals[i],
+                    tmindex,
                 });
             }
             if let Some(initer) = reader.read_indices() {
@@ -179,8 +183,13 @@ fn load_glb(
         }
         let mut buffer: Vec<u8> = Vec::new();
         let mut cursor = Cursor::new(&mut buffer);
+        dyn_image.resize(
+            dyn_image.width() / 10,
+            dyn_image.height() / 10,
+            image::imageops::FilterType::Lanczos3,
+        );
         dyn_image
-            .write_to(&mut cursor, image::ImageFormat::Jpeg)
+            .write_to(&mut cursor, image::ImageFormat::Png)
             .unwrap();
         let diffuse_texture = texture::Texture::from_bytes(
             device,
@@ -212,5 +221,9 @@ fn load_glb(
         mesh_count += 1;
     }
     println!("meshes: {}", meshes.len());
-    model::Model { meshes, materials, pos: transform }
+    model::Model {
+        meshes,
+        materials,
+        pos: transform,
+    }
 }

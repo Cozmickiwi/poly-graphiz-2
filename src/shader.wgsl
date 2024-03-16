@@ -16,9 +16,8 @@ struct Camera {
 var<uniform> camera: Camera;
 
 struct TransformationMatrix {
-    tmatrix: mat4x4<f32>,
-    origin_translation: vec3<f32>,
-    translation_back: vec3<f32>,
+    tmatrix: array<mat4x4<f32>, 2>,
+    object_pos: array<vec3<f32>, 2>,
 };
 
 struct Light {
@@ -35,6 +34,7 @@ struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) tex_coords: vec2<f32>,
     @location(2) normal: vec3<f32>,
+    @location(3) tmindex: u32,
 };
 
 struct VertexOutput {
@@ -56,13 +56,22 @@ fn vs_main(
         instance.model_matrix_3,
     );
     var out: VertexOutput;
-    let rotp = (transfmatrix.tmatrix * vec4<f32>((model.position - transfmatrix.origin_translation), 1.0)) + vec4<f32>(transfmatrix.origin_translation, 1.0);
-    let rotn = (transfmatrix.tmatrix * vec4<f32>((model.normal - transfmatrix.origin_translation), 1.0)) + vec4<f32>(transfmatrix.origin_translation, 1.0);
+    var myArray: array<vec3<f32>, 2>;
+    myArray[0] = vec3<f32>(5.0, 1.5, 0.0);
+//    myArray[1] = vec3<f32>(-10.0, 1.0, 0.0);
+    myArray[1] = vec3<f32>(0.0, 0.0, 0.0);
+    //let pos = vec3<f32>(transfmatrix.object_pos[model.tmindex]);
+    let pos = vec3<f32>(myArray[model.tmindex]);
+    let rm = transfmatrix.tmatrix[model.tmindex];
+    let rotp = (rm * vec4<f32>((model.position - pos), 1.0));
+    let rotn = (rm * vec4<f32>((model.normal), 1.0));
+    let new_p = rotp + vec4<f32>(pos, 1.0);
+    let new_n = rotn;
     out.tex_coords = model.tex_coords;
-    out.world_normal = rotn.xyz;
-    var world_position: vec4<f32> = model_matrix * vec4<f32>(rotn);
+    out.world_normal = new_n.xyz;
+    var world_position: vec4<f32> = model_matrix * new_n;
     out.world_position = (world_position).xyz;
-    out.clip_position = camera.view_proj * model_matrix * rotp;
+    out.clip_position = camera.view_proj * model_matrix * new_p;
     return out;
 }
 
@@ -86,6 +95,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let reflect_dir = reflect(-light_dir, in.world_normal);
     let specular_strength = pow(max(dot(in.world_normal, half_dir), 0.0), 32.0);
     let specular_color = specular_strength * light.color;
-    let result = (ambient_color + diffuse_color + specular_color) * object_color.xyz;
+    let result = (ambient_color + diffuse_color) * object_color.xyz;
     return vec4<f32>(result, object_color.a);
 } 
